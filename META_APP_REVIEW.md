@@ -9,6 +9,7 @@ OpenReply uses the official Instagram API to send a private reply to someone who
 - `instagram_business_basic`
 - `instagram_business_manage_comments`
 - `instagram_business_manage_messages`
+- `instagram_business_manage_insights`
 
 ## Permission justifications
 
@@ -20,16 +21,19 @@ Paste these into the App Review request, adjusted to your wording.
 
 `instagram_business_manage_messages`. After a follower comments a configured keyword, we send that follower a one-time private reply with content the account owner set up, typically a link or answer the follower asked for by commenting. This is the standard Instagram comment-to-DM flow. We send one reply per matching comment and respect Meta's rate limits.
 
+`instagram_business_manage_insights`. We use this to show the connected account owner performance data for their own Instagram professional account in OpenReply's Overview: per-media views, reach, saves, and shares, plus the account's follower trend. We do not request insights for accounts the user has not connected. These are the media and account insights covered by Meta's [Instagram Login insights guide](https://www.postman.com/meta/instagram/folder/23987686-f659d7d1-d74c-44e4-9192-9b1e8694c511).
+
 ## Screencast script
 
 Record on your published app, real accounts, one take, about two to three minutes. Narrate each step.
 
 1. Sign in with an email magic link.
 2. Go to Settings and click Connect Instagram. Show the consent screen with the permissions being granted.
-3. Create a campaign on a recent post with keyword `LINK`, a DM message, and save.
-4. On a second phone or account, comment `LINK` on that post.
-5. Show the second account receiving the DM, and the public reply appearing under the comment.
-6. Back in the app, show the DM Logs page with the SENT row.
+3. Open Overview for the connected account and show its per-post views, reach, saves, and shares and its follower-trend chart.
+4. Create a campaign on a recent post with keyword `LINK`, a DM message, and save.
+5. On a second phone or account, comment `LINK` on that post.
+6. Show the second account receiving the DM, and the public reply appearing under the comment.
+7. Back in the app, show the DM Logs page with the SENT row.
 
 Reviewers want to see the permission produce a real result for a real user. This flow does that directly.
 

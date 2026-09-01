@@ -123,7 +123,14 @@ Go to [developers.facebook.com/apps](https://developers.facebook.com/apps) and c
 - App type: Business.
 - Contact email: one you actually check.
 
-When it asks you to add a use case, filter to All, then choose Manage messaging and content on Instagram. Do not pick "Create and manage ads with Marketing API", and do not pick "Authenticate with Facebook Login". OpenReply uses Instagram Login. Picking the Facebook Login variant makes the OAuth flow fail later with a mismatched client error.
+When it asks you to add a use case, filter to All, then choose Manage messaging and content on Instagram. Do not pick "Create and manage ads with Marketing API", and do not pick "Authenticate with Facebook Login". OpenReply uses Instagram Login, so the Instagram professional account does not need to be linked to a Facebook Page. Picking the Facebook Login variant makes the OAuth flow fail later with a mismatched client error.
+
+OpenReply's OAuth flow requests these Instagram Login permissions. Make sure each one is available for the app and has the access level appropriate for the accounts you will connect:
+
+- `instagram_business_basic`
+- `instagram_business_manage_messages`
+- `instagram_business_manage_comments`
+- `instagram_business_manage_insights`
 
 If you accidentally added the Marketing API use case, remove it. It has its own heavy review requirements and can block publishing.
 
@@ -177,9 +184,9 @@ Still in the Instagram product, find the Configure webhooks step.
 - Callback URL: `https://your-app.vercel.app/api/webhook`
 - Verify token: the value of `WEBHOOK_VERIFY_TOKEN` from your environment
 - Click Verify and save. It should succeed immediately, because the app answers Meta's verification challenge. If the button is greyed out, click into the verify-token field and paste the token again; editing the callback URL often clears it.
-- Subscribe to the `comments` field, and to `messages` as well.
+- Subscribe to these four fields: `comments`, `messages`, `messaging_postbacks`, and `messaging_seen`.
 
-Both fields matter. `comments` carries comment-to-DM, which is what most people come here for. `messages` carries inbound DMs and Story replies, which is what a campaign's "also reply when someone DMs these words" toggle runs on. Subscribe to `comments` alone and that toggle looks enabled but never fires, because the events it needs are never delivered.
+All four fields matter. `comments` carries comment-to-DM, which is what most people come here for. `messages` carries inbound DMs and Story replies, which is what a campaign's "also reply when someone DMs these words" toggle runs on. `messaging_postbacks` carries opening-DM button taps so OpenReply can send the reveal message, and `messaging_seen` carries read receipts used by the no-tap fallback. Leaving out a field makes the feature that depends on it look enabled while Meta never delivers the event it needs.
 
 To test delivery without a real comment, click Test next to `comments`, then click Send to My Server. This is a two-step control. Clicking Test only previews the sample payload; the second button is what actually POSTs it to your endpoint. After sending, a row should appear in your `WebhookEvent` table.
 
@@ -203,7 +210,7 @@ Then publish. Depending on your access level, Meta may let you go live for your 
 
 This one costs an afternoon because the symptom points nowhere near the cause.
 
-A published app still holds **Standard Access** to `instagram_business_basic`, `instagram_business_manage_comments`, and `instagram_business_manage_messages`. Standard Access only covers Instagram accounts that have a role on your app — admins, developers, and Instagram testers. Publishing makes the app live; it does not widen who the permissions apply to. Advanced Access, which covers everyone else, comes only from App Review.
+A published app still holds **Standard Access** to `instagram_business_basic`, `instagram_business_manage_comments`, `instagram_business_manage_messages`, and `instagram_business_manage_insights`. Standard Access only covers Instagram accounts that have a role on your app — admins, developers, and Instagram testers. Publishing makes the app live; it does not widen who the permissions apply to. Advanced Access, which covers everyone else, comes only from App Review.
 
 So connecting a second account fails even though the first one works, on the same app, with the same code.
 
@@ -327,7 +334,7 @@ By the end, `/api/health` returns `status: ok` with `worker.healthy: true`, and 
 
 Everything above is enough to run OpenReply for your own accounts, or a handful of accounts you add as testers. No App Review needed.
 
-For a stranger to connect their own Instagram to your hosted instance, Meta requires App Review granting Advanced Access on the messaging and comments permissions. That means:
+For a stranger to connect their own Instagram to your hosted instance, Meta requires App Review granting Advanced Access on the messaging, comments, and insights permissions. That means:
 
 - A screencast of the full flow working, recorded on real accounts in one take.
 - A written justification for each permission. Drafts are in [../META_APP_REVIEW.md](../META_APP_REVIEW.md).
