@@ -12,30 +12,34 @@ type CheckStatus = "ok" | "error";
 
 interface HealthCheck {
   status: CheckStatus;
-  detail?: string;
+}
+
+interface PublicWorkerHealth {
+  healthy: boolean;
+  heartbeat: {
+    status: "running";
+    worker: "dm";
+    startedAt?: string;
+    checkedAt: string;
+  } | null;
+  ageMs: number | null;
 }
 
 async function checkDatabase(): Promise<HealthCheck> {
   try {
     await prisma.$queryRaw`SELECT 1`;
     return { status: "ok" };
-  } catch (error) {
-    return {
-      status: "error",
-      detail: error instanceof Error ? error.message : "Database check failed",
-    };
+  } catch {
+    return { status: "error" };
   }
 }
 
 async function checkRedis(): Promise<HealthCheck> {
   try {
     const pong = await getRedisConnection().ping();
-    return { status: pong === "PONG" ? "ok" : "error", detail: pong };
-  } catch (error) {
-    return {
-      status: "error",
-      detail: error instanceof Error ? error.message : "Redis check failed",
-    };
+    return { status: pong === "PONG" ? "ok" : "error" };
+  } catch {
+    return { status: "error" };
   }
 }
 
@@ -48,11 +52,28 @@ async function checkQueue(): Promise<HealthCheck & { counts?: unknown }> {
       "failed"
     );
     return { status: "ok", counts };
-  } catch (error) {
+  } catch {
+    return { status: "error" };
+  }
+}
+
+async function checkWorker(): Promise<PublicWorkerHealth> {
+  try {
+    const worker = await getWorkerHealth();
     return {
-      status: "error",
-      detail: error instanceof Error ? error.message : "Queue check failed",
+      healthy: worker.healthy,
+      heartbeat: worker.heartbeat
+        ? {
+            status: worker.heartbeat.status,
+            worker: worker.heartbeat.worker,
+            startedAt: worker.heartbeat.startedAt,
+            checkedAt: worker.heartbeat.checkedAt,
+          }
+        : null,
+      ageMs: worker.ageMs,
     };
+  } catch {
+    return { healthy: false, heartbeat: null, ageMs: null };
   }
 }
 
@@ -61,12 +82,7 @@ export async function GET() {
     checkDatabase(),
     checkRedis(),
     checkQueue(),
-    getWorkerHealth().catch((error) => ({
-      healthy: false,
-      heartbeat: null,
-      ageMs: null,
-      error: error instanceof Error ? error.message : "Worker check failed",
-    })),
+    checkWorker(),
   ]);
 
   const healthy =
