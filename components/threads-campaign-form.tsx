@@ -44,7 +44,8 @@ export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
   const [accountsError, setAccountsError] = useState("");
   const [campaignLoading, setCampaignLoading] = useState(Boolean(campaignId));
   const [campaignLoadError, setCampaignLoadError] = useState("");
-  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [accountsAttempt, setAccountsAttempt] = useState(0);
+  const [campaignAttempt, setCampaignAttempt] = useState(0);
   const [name, setName] = useState("Threads 公開回覆");
   const [accountId, setAccountId] = useState("");
   const [matchAnyPost, setMatchAnyPost] = useState(true);
@@ -87,6 +88,13 @@ export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
       }
     }
 
+    void loadAccounts();
+    return () => { ignore = true; };
+  }, [campaignId, accountsAttempt]);
+
+  useEffect(() => {
+    let ignore = false;
+
     async function loadCampaign() {
       if (!campaignId) return;
       setCampaignLoading(true);
@@ -126,10 +134,9 @@ export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
       }
     }
 
-    void loadAccounts();
     void loadCampaign();
     return () => { ignore = true; };
-  }, [campaignId, loadAttempt]);
+  }, [campaignId, campaignAttempt]);
 
   useEffect(() => {
     let ignore = false;
@@ -205,7 +212,7 @@ export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
   if (campaignLoadError) {
     return <div role="alert" className="panel rounded p-6 text-sm text-error">
       <p>{campaignLoadError}</p>
-      <button type="button" onClick={() => setLoadAttempt((attempt) => attempt + 1)} className="mt-4 rounded border border-border px-4 py-2 text-foreground">Retry</button>
+      <button type="button" onClick={() => setCampaignAttempt((attempt) => attempt + 1)} className="mt-4 rounded border border-border px-4 py-2 text-foreground">Retry</button>
     </div>;
   }
 
@@ -254,7 +261,7 @@ export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
         <label className="flex items-center gap-3 rounded border border-border p-4 text-sm"><input type="checkbox" checked={wholeWordMatch} onChange={(e) => setWholeWordMatch(e.target.checked)} /> Match whole words</label>
         <label className="flex items-center gap-3 rounded border border-border p-4 text-sm"><input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} /> Activate immediately</label>
       </div>
-      {accountsError && <div role="alert" className="text-sm text-error"><p>{accountsError}</p><button type="button" onClick={() => setLoadAttempt((attempt) => attempt + 1)} className="mt-2 rounded border border-border px-3 py-1.5 text-foreground">Retry</button></div>}
+      {accountsError && <div role="alert" className="text-sm text-error"><p>{accountsError}</p><button type="button" onClick={() => setAccountsAttempt((attempt) => attempt + 1)} className="mt-2 rounded border border-border px-3 py-1.5 text-foreground">Retry</button></div>}
       {!accountsLoading && !accountsError && accounts.length === 0 && <p className="text-sm text-warning">Connect a Threads account in Settings first.</p>}
       {error && <p role="alert" className="text-sm text-error">{error}</p>}
       <button disabled={saving || accountsLoading || Boolean(accountsError) || !accountId || (!matchAnyPost && (!postId || !postUrl))} className="rounded bg-accent px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{saving ? "Saving…" : "Save Threads campaign"}</button>

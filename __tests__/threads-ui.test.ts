@@ -89,7 +89,14 @@ describe("campaign channel navigation", () => {
     expect(list).toContain("function retryLoad()");
     expect(list).toContain("setLoading(true)");
     expect(list).toContain('setLoadError("")');
-    expect(list.indexOf("loadError ?")).toBeLessThan(list.indexOf("campaigns.length === 0"));
+    expect(list.indexOf("loadError && campaigns.length === 0")).toBeLessThan(list.indexOf("No Threads campaigns yet"));
+  });
+
+  it("keeps a populated campaign list visible when revalidation fails", () => {
+    const list = readFileSync("app/(dashboard)/campaigns/threads/page.tsx", "utf8");
+    expect(list).toContain("loadError && campaigns.length > 0");
+    expect(list).toContain("loadError && campaigns.length === 0");
+    expect(list).toContain("campaigns.length > 0 &&");
   });
 
   it("keeps mutation failures visible and prevents repeated campaign actions", () => {
@@ -99,7 +106,11 @@ describe("campaign channel navigation", () => {
     expect(list).toContain("if (!response.ok || !payload.success)");
     expect(list).toContain("catch (actionFailure");
     expect(list).toContain("finally");
-    expect(list).toContain("disabled={actionCampaignId === campaign.id}");
+    expect(list).toContain("const mutationInFlightRef = useRef(false)");
+    expect(list).toContain("if (mutationInFlightRef.current) return");
+    expect(list).toContain("mutationInFlightRef.current = true");
+    expect(list).toContain("disabled={Boolean(actionCampaignId)}");
+    expect(list.match(/disabled=\{Boolean\(actionCampaignId\)\}/g)).toHaveLength(2);
   });
 
   it("distinguishes account and campaign-load failures from valid form states", () => {
@@ -112,6 +123,16 @@ describe("campaign channel navigation", () => {
     expect(form).toContain("if (campaignLoadError)");
     expect(form).toContain("!accountsLoading && !accountsError && accounts.length === 0");
     expect(form).toContain('role="alert"');
+  });
+
+  it("retries account and campaign hydration independently", () => {
+    const form = readFileSync("components/threads-campaign-form.tsx", "utf8");
+    expect(form).toContain("const [accountsAttempt, setAccountsAttempt]");
+    expect(form).toContain("const [campaignAttempt, setCampaignAttempt]");
+    expect(form).toContain("}, [campaignId, accountsAttempt])");
+    expect(form).toContain("}, [campaignId, campaignAttempt])");
+    expect(form).toContain("setAccountsAttempt((attempt) => attempt + 1)");
+    expect(form).toContain("setCampaignAttempt((attempt) => attempt + 1)");
   });
 
   it("always releases the saving state and reports response, JSON, and API failures", () => {

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 type Campaign = {
   id: string; name: string; matchAnyPost: boolean; postUrl: string | null; keywords: string[]; replyMessage: string;
@@ -21,6 +21,7 @@ export default function ThreadsCampaignsPage() {
   const [loadError, setLoadError] = useState("");
   const [actionError, setActionError] = useState("");
   const [actionCampaignId, setActionCampaignId] = useState<string | null>(null);
+  const mutationInFlightRef = useRef(false);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -32,6 +33,7 @@ export default function ThreadsCampaignsPage() {
       if (!Array.isArray(payload.data)) {
         throw new Error("Could not load Threads campaigns");
       }
+      setLoadError("");
       setCampaigns(payload.data as Campaign[]);
     } catch (loadFailure: unknown) {
       if (!signal?.aborted) {
@@ -58,7 +60,8 @@ export default function ThreadsCampaignsPage() {
   }
 
   async function mutate(campaign: Campaign, method: "PATCH" | "DELETE") {
-    if (actionCampaignId) return;
+    if (mutationInFlightRef.current) return;
+    mutationInFlightRef.current = true;
     setActionCampaignId(campaign.id);
     setActionError("");
     try {
@@ -77,6 +80,7 @@ export default function ThreadsCampaignsPage() {
     } catch (actionFailure: unknown) {
       setActionError(errorMessage(actionFailure, `Could not ${method === "PATCH" ? "update" : "delete"} Threads campaign`));
     } finally {
+      mutationInFlightRef.current = false;
       setActionCampaignId(null);
     }
   }
@@ -93,6 +97,9 @@ export default function ThreadsCampaignsPage() {
   return <div className="space-y-6">
     <div className="flex flex-wrap items-end justify-between gap-4"><div><Link href="/campaigns" className="text-sm text-muted hover:text-foreground">← Campaign channels</Link><h1 className="mt-2 text-3xl font-black">Threads Campaigns</h1><p className="mt-2 text-sm text-muted">Keyword-triggered public replies on your Threads posts.</p></div><Link href="/campaigns/threads/new" className="rounded bg-accent px-4 py-2.5 text-sm font-semibold text-white">New Threads Campaign</Link></div>
     {actionError && <p role="alert" className="rounded border border-error/40 p-4 text-sm text-error">{actionError}</p>}
-    {loading ? <div className="panel h-40 rounded" /> : loadError ? <div role="alert" className="panel rounded p-10 text-center"><p className="font-semibold text-error">{loadError}</p><button type="button" onClick={retryLoad} className="mt-4 rounded border border-border px-4 py-2 text-sm">Retry</button></div> : campaigns.length === 0 ? <div className="panel rounded p-10 text-center"><p className="font-semibold">No Threads campaigns yet</p><p className="mt-2 text-sm text-muted">Connect Threads in Settings, then choose all posts or a specific post to monitor.</p></div> : <div className="space-y-3">{campaigns.map((campaign) => <article key={campaign.id} className="panel rounded p-5"><div className="flex flex-wrap items-start justify-between gap-4"><div><div className="flex items-center gap-2"><h2 className="font-bold">{campaign.name}</h2><span className="rounded-full border border-border px-2 py-0.5 text-xs text-muted">@{campaign.threadsAccount.username}</span><span className={campaign.isActive ? "text-xs text-success" : "text-xs text-muted"}>{campaign.isActive ? "Active" : "Paused"}</span></div><div className="mt-3 flex flex-wrap gap-1.5">{campaign.keywords.map((keyword) => <span key={keyword} className="rounded bg-accent/10 px-2 py-1 text-xs text-accent">{keyword}</span>)}</div><p className="mt-3 text-sm text-muted">“{campaign.replyMessage}”</p><p className="mt-3 text-xs text-muted">{campaign.analytics.sent} sent · {campaign.analytics.failed} failed · {campaign.analytics.pending} pending</p></div><div className="flex flex-wrap gap-2">{campaign.matchAnyPost ? <span className="rounded border border-border px-3 py-2 text-xs text-muted">All posts</span> : campaign.postUrl && <a href={campaign.postUrl} target="_blank" rel="noreferrer" className="rounded border border-border px-3 py-2 text-xs">View post</a>}<Link href={`/campaigns/threads/${campaign.id}/edit`} className="rounded border border-border px-3 py-2 text-xs">Edit</Link><button type="button" disabled={actionCampaignId === campaign.id} onClick={() => void toggle(campaign)} className="rounded border border-border px-3 py-2 text-xs disabled:opacity-50">{campaign.isActive ? "Pause" : "Activate"}</button><button type="button" disabled={actionCampaignId === campaign.id} onClick={() => void remove(campaign)} className="rounded border border-error/40 px-3 py-2 text-xs text-error disabled:opacity-50">Delete</button></div></div></article>)}</div>}
+    {loading && campaigns.length > 0 && <p aria-live="polite" className="text-sm text-muted">Refreshing Threads campaigns…</p>}
+    {loadError && campaigns.length > 0 && <div role="alert" className="rounded border border-error/40 p-4 text-sm text-error"><p>{loadError}</p><button type="button" onClick={retryLoad} className="mt-2 rounded border border-border px-3 py-1.5 text-foreground">Retry</button></div>}
+    {loading && campaigns.length === 0 ? <div className="panel h-40 rounded" /> : loadError && campaigns.length === 0 ? <div role="alert" className="panel rounded p-10 text-center"><p className="font-semibold text-error">{loadError}</p><button type="button" onClick={retryLoad} className="mt-4 rounded border border-border px-4 py-2 text-sm">Retry</button></div> : campaigns.length === 0 ? <div className="panel rounded p-10 text-center"><p className="font-semibold">No Threads campaigns yet</p><p className="mt-2 text-sm text-muted">Connect Threads in Settings, then choose all posts or a specific post to monitor.</p></div> : null}
+    {campaigns.length > 0 && <div className="space-y-3">{campaigns.map((campaign) => <article key={campaign.id} className="panel rounded p-5"><div className="flex flex-wrap items-start justify-between gap-4"><div><div className="flex items-center gap-2"><h2 className="font-bold">{campaign.name}</h2><span className="rounded-full border border-border px-2 py-0.5 text-xs text-muted">@{campaign.threadsAccount.username}</span><span className={campaign.isActive ? "text-xs text-success" : "text-xs text-muted"}>{campaign.isActive ? "Active" : "Paused"}</span></div><div className="mt-3 flex flex-wrap gap-1.5">{campaign.keywords.map((keyword) => <span key={keyword} className="rounded bg-accent/10 px-2 py-1 text-xs text-accent">{keyword}</span>)}</div><p className="mt-3 text-sm text-muted">“{campaign.replyMessage}”</p><p className="mt-3 text-xs text-muted">{campaign.analytics.sent} sent · {campaign.analytics.failed} failed · {campaign.analytics.pending} pending</p></div><div className="flex flex-wrap gap-2">{campaign.matchAnyPost ? <span className="rounded border border-border px-3 py-2 text-xs text-muted">All posts</span> : campaign.postUrl && <a href={campaign.postUrl} target="_blank" rel="noreferrer" className="rounded border border-border px-3 py-2 text-xs">View post</a>}<Link href={`/campaigns/threads/${campaign.id}/edit`} className="rounded border border-border px-3 py-2 text-xs">Edit</Link><button type="button" disabled={Boolean(actionCampaignId)} onClick={() => void toggle(campaign)} className="rounded border border-border px-3 py-2 text-xs disabled:opacity-50">{campaign.isActive ? "Pause" : "Activate"}</button><button type="button" disabled={Boolean(actionCampaignId)} onClick={() => void remove(campaign)} className="rounded border border-error/40 px-3 py-2 text-xs text-error disabled:opacity-50">Delete</button></div></div></article>)}</div>}
   </div>;
 }
