@@ -15,6 +15,11 @@ const verificationMigrationPath =
 const verificationMigration = existsSync(verificationMigrationPath)
   ? readFileSync(verificationMigrationPath, "utf8")
   : "";
+const inactiveDefaultMigrationPath =
+  "prisma/migrations/20260917090000_default_threads_campaign_inactive/migration.sql";
+const inactiveDefaultMigration = existsSync(inactiveDefaultMigrationPath)
+  ? readFileSync(inactiveDefaultMigrationPath, "utf8")
+  : "";
 
 describe("Threads persistence schema", () => {
   it("keeps Threads accounts, campaigns, logs, and deduplication isolated", () => {
@@ -79,5 +84,16 @@ describe("Threads persistence schema", () => {
     );
     expect(verificationMigration).not.toMatch(/SET\s+"postVerifiedAt"/i);
     expect(verificationMigration).toMatch(/provenance|unverified|legacy/i);
+  });
+
+  it("defaults new Threads campaigns to inactive in Prisma and the database", () => {
+    const threadsCampaign = schema.match(
+      /model ThreadsCampaign \{[\s\S]*?\n\}/,
+    )?.[0];
+
+    expect(threadsCampaign).toMatch(/isActive\s+Boolean\s+@default\(false\)/);
+    expect(inactiveDefaultMigration).toMatch(
+      /ALTER TABLE\s+"ThreadsCampaign"[\s\S]*ALTER COLUMN\s+"isActive"\s+SET DEFAULT false/i,
+    );
   });
 });
