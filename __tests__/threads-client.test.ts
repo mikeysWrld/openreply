@@ -3,6 +3,7 @@ import {
   ThreadsApiError,
   createThreadsReplyContainer,
   getThreadsContainerStatus,
+  getThreadsPostDetails,
   getOwnedThreads,
   getThreadsConversation,
   getThreadsProfile,
@@ -76,6 +77,93 @@ describe("Threads API client", () => {
     const conversation = new URL(vi.mocked(fetch).mock.calls[1][0] as string);
     expect(conversation.pathname).toBe("/post_1/conversation");
     expect(conversation.searchParams.get("reverse")).toBe("true");
+  });
+
+  it("loads exact post details with the canonical permalink and owner", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      id: "old_post_1",
+      permalink: "https://www.threads.net/@golfrai/post/old",
+      owner: { id: "threads_user_1" },
+    }), { status: 200 })));
+
+    await expect(getThreadsPostDetails("secret-token", "old_post_1")).resolves.toEqual({
+      id: "old_post_1",
+      permalink: "https://www.threads.net/@golfrai/post/old",
+      owner: { id: "threads_user_1" },
+    });
+    const request = new URL(vi.mocked(fetch).mock.calls[0][0] as string);
+    expect(request.pathname).toBe("/old_post_1");
+    expect(request.searchParams.get("fields")).toBe("id,permalink,owner");
+    expect(request.searchParams.get("access_token")).toBe("secret-token");
+  });
+
+  it("keeps an untrusted post ID inside the Threads Graph path", async () => {
+    const postId = "//evil.example/path";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      id: postId,
+      permalink: "https://threads.net/@golfrai/post/old",
+      owner: { id: "threads_user_1" },
+    }), { status: 200 })));
+
+    await getThreadsPostDetails("secret-token", postId);
+
+    const request = new URL(vi.mocked(fetch).mock.calls[0][0] as string);
+    expect(request.origin).toBe("https://graph.threads.net");
+    expect(request.pathname).toBe("/%2F%2Fevil.example%2Fpath");
+  });
+
+  it("rejects exact post details for a different requested ID", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      id: "different_post",
+      permalink: "https://threads.net/@golfrai/post/different",
+      owner: { id: "threads_user_1" },
+    }), { status: 200 })));
+
+    const error = await getThreadsPostDetails("secret-token", "requested_post")
+      .catch((value) => value);
+
+    expect(error).toBeInstanceOf(ThreadsApiError);
+    expect(error.status).toBe(502);
+  });
+
+  it.each([
+    { permalink: "http://threads.net/@golfrai/post/1", label: "HTTP" },
+    { permalink: "https://threads.net.evil.example/@golfrai/post/1", label: "lookalike host" },
+    { permalink: "https://evil.example/@golfrai/post/1", label: "foreign host" },
+    { permalink: "https://user:password@threads.net/@golfrai/post/1", label: "credentials" },
+    { permalink: "not-a-url", label: "malformed URL" },
+  ])("rejects a $label post permalink", async ({ permalink }) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      id: "post_1",
+      permalink,
+      owner: { id: "threads_user_1" },
+    }), { status: 200 })));
+
+    const error = await getThreadsPostDetails("secret-token", "post_1")
+      .catch((value) => value);
+
+    expect(error).toBeInstanceOf(ThreadsApiError);
+    expect(error.status).toBe(502);
+    expect(error.message).not.toContain("secret-token");
+  });
+
+  it.each([
+    {},
+    { owner: {} },
+    { owner: { id: "" } },
+    { owner: { id: 42 } },
+  ])("rejects malformed post ownership details: %j", async (ownerFields) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      id: "post_1",
+      permalink: "https://threads.net/@golfrai/post/1",
+      ...ownerFields,
+    }), { status: 200 })));
+
+    const error = await getThreadsPostDetails("secret-token", "post_1")
+      .catch((value) => value);
+
+    expect(error).toBeInstanceOf(ThreadsApiError);
+    expect(error.status).toBe(502);
   });
 
   it("rejects a paginated response whose data is not an array", async () => {

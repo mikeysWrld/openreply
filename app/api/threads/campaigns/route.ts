@@ -2,7 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db/client";
 import { decryptToken } from "@/lib/meta/oauth";
-import { getOwnedThreads } from "@/lib/threads/client";
+import {
+  getThreadsPostDetails,
+  isCanonicalThreadsPermalink,
+} from "@/lib/threads/client";
 import { canManageWorkspace, getCurrentWorkspaceContext } from "@/lib/workspace-access";
 
 export const dynamic = "force-dynamic";
@@ -19,7 +22,7 @@ const campaignFields = {
 const targetFields = {
   matchAnyPost: z.boolean(),
   postId: z.string().trim().min(1).nullable(),
-  postUrl: z.string().url().nullable(),
+  postUrl: z.string().url().nullable().optional(),
 };
 
 const createSchema = z.object({
@@ -27,11 +30,11 @@ const createSchema = z.object({
   ...targetFields,
   matchAnyPost: targetFields.matchAnyPost.default(false),
 }).superRefine((data, context) => {
-  if (!data.matchAnyPost && (!data.postId || !data.postUrl)) {
+  if (!data.matchAnyPost && !data.postId) {
     context.addIssue({
       code: "custom",
-      message: "A post ID and URL are required for a specific-post campaign",
-      path: [!data.postId ? "postId" : "postUrl"],
+      message: "A post ID is required for a specific-post campaign",
+      path: ["postId"],
     });
   }
 }).transform((data) => data.matchAnyPost
@@ -63,7 +66,7 @@ const allPostsTargetSchema = z.object({
 const specificPostTargetSchema = z.object({
   matchAnyPost: z.literal(false),
   postId: z.string().trim().min(1),
-  postUrl: z.string().url(),
+  postUrl: z.string().url().nullable().optional(),
 });
 
 const updateSchema = z.intersection(
@@ -73,17 +76,14 @@ const updateSchema = z.intersection(
 
 async function getCanonicalOwnedPostUrl(
   encryptedAccessToken: string,
+  threadsUserId: string,
   postId: string
 ): Promise<string | null> {
-  const posts = await getOwnedThreads(decryptToken(encryptedAccessToken), 100);
-  const post = posts.find((candidate) => candidate.id === postId);
-  if (!post) return null;
-
-  const permalink = z.string().url().safeParse(post.permalink);
-  if (!permalink.success) {
-    throw new Error("Threads returned a post without a valid permalink");
-  }
-  return permalink.data;
+  const post = await getThreadsPostDetails(
+    decryptToken(encryptedAccessToken),
+    postId
+  );
+  return post.owner.id === threadsUserId ? post.permalink : null;
 }
 
 function postNotOwnedResponse() {
@@ -150,7 +150,7 @@ export async function POST(request: NextRequest) {
   }
   const account = await prisma.threadsAccount.findFirst({
     where: { id: parsed.data.threadsAccountId, workspaceId: context.workspaceId },
-    select: { id: true, accessToken: true },
+    select: { id: true, accessToken: true, threadsUserId: true },
   });
   if (!account) {
     return NextResponse.json({ success: false, error: "Threads account not found" }, { status: 400 });
@@ -158,7 +158,11 @@ export async function POST(request: NextRequest) {
   let postUrl = parsed.data.postUrl;
   if (!parsed.data.matchAnyPost) {
     try {
-      postUrl = await getCanonicalOwnedPostUrl(account.accessToken, parsed.data.postId!);
+      postUrl = await getCanonicalOwnedPostUrl(
+        account.accessToken,
+        account.threadsUserId,
+        parsed.data.postId!
+      );
     } catch {
       console.error("[Threads Campaigns] Failed to verify post ownership");
       return postVerificationFailedResponse();
@@ -182,21 +186,37 @@ export async function PATCH(request: NextRequest) {
   if (parsed.data.matchAnyPost === false) {
     const campaign = await prisma.threadsCampaign.findFirst({
       where: { id, workspaceId: context.workspaceId },
-      select: { id: true, threadsAccount: { select: { accessToken: true } } },
+      select: {
+        id: true,
+        matchAnyPost: true,
+        postId: true,
+        postUrl: true,
+        threadsAccount: {
+          select: { accessToken: true, threadsUserId: true },
+        },
+      },
     });
     if (!campaign) {
       return NextResponse.json({ success: false, error: "Not found" }, { status: 404 });
     }
 
-    let postUrl: string | null;
-    try {
-      postUrl = await getCanonicalOwnedPostUrl(
-        campaign.threadsAccount.accessToken,
-        parsed.data.postId
-      );
-    } catch {
-      console.error("[Threads Campaigns] Failed to verify post ownership");
-      return postVerificationFailedResponse();
+    let postUrl =
+      !campaign.matchAnyPost &&
+      campaign.postId === parsed.data.postId &&
+      isCanonicalThreadsPermalink(campaign.postUrl)
+        ? campaign.postUrl
+        : null;
+    if (!postUrl) {
+      try {
+        postUrl = await getCanonicalOwnedPostUrl(
+          campaign.threadsAccount.accessToken,
+          campaign.threadsAccount.threadsUserId,
+          parsed.data.postId
+        );
+      } catch {
+        console.error("[Threads Campaigns] Failed to verify post ownership");
+        return postVerificationFailedResponse();
+      }
     }
     if (!postUrl) return postNotOwnedResponse();
     updateData = { ...parsed.data, postUrl };

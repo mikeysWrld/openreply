@@ -52,6 +52,12 @@ export interface ThreadsPost {
   shortcode?: string;
 }
 
+export interface ThreadsPostDetails {
+  id: string;
+  permalink: string;
+  owner: { id: string };
+}
+
 export interface ThreadsReply extends ThreadsPost {
   username?: string;
   owner?: { id: string };
@@ -144,6 +150,45 @@ export function getOwnedThreads(
     limit,
     accessToken
   );
+}
+
+export function isCanonicalThreadsPermalink(value: unknown): value is string {
+  if (typeof value !== "string" || value.trim().length === 0) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" &&
+      (url.hostname === "threads.net" || url.hostname.endsWith(".threads.net")) &&
+      url.username === "" &&
+      url.password === "" &&
+      url.port === "";
+  } catch {
+    return false;
+  }
+}
+
+export async function getThreadsPostDetails(
+  accessToken: string,
+  postId: string
+): Promise<ThreadsPostDetails> {
+  const response = await threadsFetch(
+    graphUrl(`/${encodeURIComponent(postId)}`, accessToken, {
+      fields: "id,permalink,owner",
+    })
+  );
+  const post = await readThreadsJson<Record<string, unknown>>(
+    response,
+    "Threads API request failed",
+    [accessToken]
+  );
+  const id = requireThreadsString(post.id);
+  if (id !== postId || !isThreadsRecord(post.owner)) {
+    throw invalidThreadsResponse();
+  }
+  const ownerId = requireThreadsString(post.owner.id);
+  if (!isCanonicalThreadsPermalink(post.permalink)) {
+    throw invalidThreadsResponse();
+  }
+  return { id, permalink: post.permalink, owner: { id: ownerId } };
 }
 
 export function getThreadsConversation(
