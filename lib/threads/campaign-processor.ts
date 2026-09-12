@@ -5,6 +5,8 @@ import type { ThreadsReply } from "@/lib/threads/client";
 import { isOwnThreadsReply, normalizeThreadsReply } from "@/lib/threads/replies";
 import { matchKeywords } from "@/lib/utils/keyword-matcher";
 
+class ProcessedThreadsReplyAlreadyClaimedError extends Error {}
+
 export async function processObservedThreadsReply(input: {
   threadsAccountId: string;
   rootPostId: string;
@@ -18,73 +20,107 @@ export async function processObservedThreadsReply(input: {
   if (!account) return "seen";
   if (isOwnThreadsReply(input.reply, account.threadsUserId)) return "self";
 
+  const normalized = normalizeThreadsReply(input.reply);
+  let selected:
+    | {
+        logId: string;
+        campaignId: string;
+        replyMessage: string;
+      }
+    | null;
+
   try {
-    await prisma.processedThreadsReply.create({
-      data: {
-        threadsAccountId: input.threadsAccountId,
-        replyId: input.reply.id,
-        source: input.source,
-      },
+    selected = await prisma.$transaction(async (transaction) => {
+      try {
+        await transaction.processedThreadsReply.create({
+          data: {
+            threadsAccountId: input.threadsAccountId,
+            replyId: input.reply.id,
+            source: input.source,
+          },
+        });
+      } catch (error) {
+        if (
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === "P2002"
+        ) {
+          throw new ProcessedThreadsReplyAlreadyClaimedError();
+        }
+        throw error;
+      }
+
+      const campaigns = await transaction.threadsCampaign.findMany({
+        where: {
+          threadsAccountId: input.threadsAccountId,
+          isActive: true,
+          OR: [
+            { matchAnyPost: true },
+            {
+              matchAnyPost: false,
+              postId: input.rootPostId,
+              postVerifiedAt: { not: null },
+            },
+          ],
+        },
+        orderBy: [
+          { matchAnyPost: "asc" },
+          { createdAt: "asc" },
+          { id: "asc" },
+        ],
+      });
+
+      for (const campaign of campaigns) {
+        const match = matchKeywords(
+          normalized.text,
+          campaign.keywords,
+          campaign.wholeWordMatch,
+        );
+        if (!match.matched) continue;
+
+        const log = await transaction.threadsReplyLog.create({
+          data: {
+            workspaceId: account.workspaceId,
+            threadsCampaignId: campaign.id,
+            threadsAccountId: input.threadsAccountId,
+            replyId: normalized.id,
+            replyAuthorId: normalized.authorId,
+            replyAuthorName: normalized.authorName,
+            replyText: normalized.text,
+            replyMessage: campaign.replyMessage,
+            matchedKeyword: match.matchedKeyword,
+          },
+        });
+
+        return {
+          logId: log.id,
+          campaignId: campaign.id,
+          replyMessage: campaign.replyMessage,
+        };
+      }
+
+      return null;
     });
   } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+    if (error instanceof ProcessedThreadsReplyAlreadyClaimedError) {
       return "seen";
     }
     throw error;
   }
 
-  const campaigns = await prisma.threadsCampaign.findMany({
-    where: {
+  if (!selected) return "no_match";
+
+  await getThreadsReplyQueue().add(
+    "publish-thread-reply",
+    {
       threadsAccountId: input.threadsAccountId,
-      isActive: true,
-      OR: [
-        { matchAnyPost: true },
-        {
-          matchAnyPost: false,
-          postId: input.rootPostId,
-          postVerifiedAt: { not: null },
-        },
-      ],
+      threadsCampaignId: selected.campaignId,
+      threadsReplyLogId: selected.logId,
+      replyId: normalized.id,
+      replyMessage: selected.replyMessage,
     },
-    orderBy: [
-      { matchAnyPost: "asc" },
-      { createdAt: "asc" },
-      { id: "asc" },
-    ],
-  });
-  const normalized = normalizeThreadsReply(input.reply);
-  for (const campaign of campaigns) {
-    const match = matchKeywords(
-      normalized.text,
-      campaign.keywords,
-      campaign.wholeWordMatch
-    );
-    if (!match.matched) continue;
-    const log = await prisma.threadsReplyLog.create({
-      data: {
-        workspaceId: account.workspaceId,
-        threadsCampaignId: campaign.id,
-        threadsAccountId: input.threadsAccountId,
-        replyId: normalized.id,
-        replyAuthorId: normalized.authorId,
-        replyAuthorName: normalized.authorName,
-        replyText: normalized.text,
-        replyMessage: campaign.replyMessage,
-        matchedKeyword: match.matchedKeyword,
-      },
-    });
-    await getThreadsReplyQueue().add(
-      "publish-thread-reply",
-      {
-        threadsAccountId: input.threadsAccountId,
-        threadsCampaignId: campaign.id,
-        threadsReplyLogId: log.id,
-        replyId: normalized.id,
-        replyMessage: campaign.replyMessage,
-      },
-      { jobId: `threads_${input.threadsAccountId}_${normalized.id}_${campaign.id}` }
-    );
-    return "queued";
-  }
-  return "no_match";
+    {
+      jobId: `threads_${input.threadsAccountId}_${normalized.id}_${selected.campaignId}`,
+    },
+  );
+  return "queued";
 }

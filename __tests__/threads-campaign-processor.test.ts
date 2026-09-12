@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   accountFindUnique: vi.fn(),
+  transaction: vi.fn(),
   processedCreate: vi.fn(),
   campaignFindMany: vi.fn(),
   logCreate: vi.fn(),
@@ -11,9 +12,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/db/client", () => ({
   prisma: {
     threadsAccount: { findUnique: mocks.accountFindUnique },
-    processedThreadsReply: { create: mocks.processedCreate },
-    threadsCampaign: { findMany: mocks.campaignFindMany },
-    threadsReplyLog: { create: mocks.logCreate },
+    $transaction: mocks.transaction,
   },
 }));
 
@@ -66,6 +65,11 @@ beforeEach(() => {
   mocks.campaignFindMany.mockResolvedValue([]);
   mocks.logCreate.mockResolvedValue({ id: "log_1" });
   mocks.queueAdd.mockResolvedValue(undefined);
+  mocks.transaction.mockImplementation((callback) => callback({
+    processedThreadsReply: { create: mocks.processedCreate },
+    threadsCampaign: { findMany: mocks.campaignFindMany },
+    threadsReplyLog: { create: mocks.logCreate },
+  }));
 });
 
 describe("Threads campaign reply selection", () => {
@@ -194,6 +198,51 @@ describe("Threads campaign reply selection", () => {
     await expect(processObservedThreadsReply(input)).resolves.toBe("seen");
 
     expect(mocks.campaignFindMany).not.toHaveBeenCalled();
+    expect(mocks.logCreate).not.toHaveBeenCalled();
+    expect(mocks.queueAdd).not.toHaveBeenCalled();
+  });
+
+  it("retries the reply after a campaign lookup failure rolls back its marker", async () => {
+    mocks.campaignFindMany
+      .mockRejectedValueOnce(new Error("campaign lookup failed"))
+      .mockResolvedValueOnce([campaign()]);
+
+    await expect(processObservedThreadsReply(input)).rejects.toThrow(
+      "campaign lookup failed",
+    );
+    await expect(processObservedThreadsReply(input)).resolves.toBe("queued");
+
+    expect(mocks.transaction).toHaveBeenCalledTimes(2);
+    expect(mocks.processedCreate).toHaveBeenCalledTimes(2);
+    expect(mocks.logCreate).toHaveBeenCalledOnce();
+    expect(mocks.queueAdd).toHaveBeenCalledOnce();
+  });
+
+  it("retries the reply after a reply-log P2002 rolls back its marker", async () => {
+    mocks.campaignFindMany.mockResolvedValue([campaign()]);
+    mocks.logCreate
+      .mockRejectedValueOnce(
+        new Prisma.PrismaClientKnownRequestError("reply log conflict", {
+          code: "P2002",
+          clientVersion: "test",
+        }),
+      )
+      .mockResolvedValueOnce({ id: "log_1" });
+
+    await expect(processObservedThreadsReply(input)).rejects.toThrow();
+    await expect(processObservedThreadsReply(input)).resolves.toBe("queued");
+
+    expect(mocks.transaction).toHaveBeenCalledTimes(2);
+    expect(mocks.processedCreate).toHaveBeenCalledTimes(2);
+    expect(mocks.logCreate).toHaveBeenCalledTimes(2);
+    expect(mocks.queueAdd).toHaveBeenCalledOnce();
+  });
+
+  it("commits the processed marker when no campaign matches", async () => {
+    await expect(processObservedThreadsReply(input)).resolves.toBe("no_match");
+
+    expect(mocks.transaction).toHaveBeenCalledOnce();
+    expect(mocks.processedCreate).toHaveBeenCalledOnce();
     expect(mocks.logCreate).not.toHaveBeenCalled();
     expect(mocks.queueAdd).not.toHaveBeenCalled();
   });
