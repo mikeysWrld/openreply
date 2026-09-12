@@ -1,5 +1,8 @@
+import { ThreadsApiError, threadsFetch } from "@/lib/threads/fetch";
+
 const GRAPH_URL = "https://graph.threads.net";
-const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+
+export { ThreadsApiError } from "@/lib/threads/fetch";
 
 export type ThreadsContainerStatusValue =
   | "IN_PROGRESS"
@@ -39,18 +42,6 @@ export interface ThreadsReply extends ThreadsPost {
   replied_to?: { id: string };
 }
 
-export class ThreadsApiError extends Error {
-  constructor(
-    message: string,
-    public readonly status: number,
-    public readonly code: number | null,
-    public readonly retryable: boolean
-  ) {
-    super(message);
-    this.name = "ThreadsApiError";
-  }
-}
-
 async function readResponse<T>(response: Response): Promise<T> {
   const data = (await response.json()) as T & {
     error?: { message?: string; code?: number };
@@ -71,33 +62,6 @@ function graphUrl(path: string, token: string, params?: Record<string, string>) 
   const search = new URLSearchParams({ access_token: token, ...params });
   url.search = search.toString();
   return url;
-}
-
-function requestTimeoutMs(): number {
-  const configured = process.env.THREADS_REQUEST_TIMEOUT_MS;
-  if (configured === undefined) return DEFAULT_REQUEST_TIMEOUT_MS;
-  const parsed = Number(configured);
-  return Number.isFinite(parsed) && Number.isInteger(parsed) && parsed > 0
-    ? parsed
-    : DEFAULT_REQUEST_TIMEOUT_MS;
-}
-
-async function threadsFetch(
-  input: string | URL,
-  init: RequestInit = {}
-): Promise<Response> {
-  try {
-    return await fetch(input, {
-      ...init,
-      signal: AbortSignal.timeout(requestTimeoutMs()),
-    });
-  } catch (error) {
-    const reason =
-      error instanceof Error && error.name === "AbortError"
-        ? "timed out"
-        : "failed before receiving a response";
-    throw new ThreadsApiError(`Threads API request ${reason}`, 0, null, true);
-  }
 }
 
 export async function getThreadsProfile(

@@ -10,6 +10,8 @@ import {
 } from "../lib/threads/client";
 
 beforeEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -86,8 +88,9 @@ describe("Threads API client", () => {
     expect(publish.searchParams.get("creation_id")).toBe("container_1");
   });
 
-  it("adds a finite timeout signal to every Graph fetch", async () => {
-    process.env.THREADS_REQUEST_TIMEOUT_MS = "1234";
+  it("uses the configured request timeout duration", async () => {
+    vi.stubEnv("THREADS_REQUEST_TIMEOUT_MS", "1234");
+    const timeout = vi.spyOn(AbortSignal, "timeout");
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ id: "42", username: "golfrai" }), { status: 200 })
     ));
@@ -97,7 +100,46 @@ describe("Threads API client", () => {
     expect(vi.mocked(fetch).mock.calls[0][1]).toEqual(expect.objectContaining({
       signal: expect.any(AbortSignal),
     }));
-    delete process.env.THREADS_REQUEST_TIMEOUT_MS;
+    expect(timeout).toHaveBeenCalledWith(1234);
+  });
+
+  it("defaults the request timeout to 15000 milliseconds", async () => {
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: "42", username: "golfrai" }), { status: 200 })
+    ));
+
+    await getThreadsProfile("token");
+
+    expect(timeout).toHaveBeenCalledWith(15_000);
+  });
+
+  it.each(["", "0", "-1", "1.5", "NaN", "Infinity"])(
+    "falls back to 15000 milliseconds for invalid timeout %j",
+    async (configured) => {
+      vi.stubEnv("THREADS_REQUEST_TIMEOUT_MS", configured);
+      const timeout = vi.spyOn(AbortSignal, "timeout");
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ id: "42", username: "golfrai" }), { status: 200 })
+      ));
+
+      await getThreadsProfile("token");
+
+      expect(timeout).toHaveBeenCalledWith(15_000);
+    }
+  );
+
+  it("classifies ordinary network failures as retryable without leaking tokens", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(
+      new Error("socket failed for access_token=super-secret")
+    ));
+
+    const error = await getThreadsProfile("super-secret").catch((value) => value);
+
+    expect(error).toBeInstanceOf(ThreadsApiError);
+    expect(error.retryable).toBe(true);
+    expect(error.status).toBe(0);
+    expect(error.message).not.toContain("super-secret");
   });
 
   it("classifies timeout failures as retryable without leaking tokens", async () => {

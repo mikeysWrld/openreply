@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getMissingThreadsOAuthEnv } from "../lib/env";
+import { ThreadsApiError } from "../lib/threads/client";
 import {
   createThreadsOAuthState,
   exchangeLongLivedThreadsToken,
@@ -10,6 +11,7 @@ import {
 
 beforeEach(() => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
   vi.stubEnv("NEXTAUTH_SECRET", "test-secret-that-is-long-enough");
   vi.stubEnv("THREADS_APP_ID", "threads-app-id");
@@ -37,6 +39,8 @@ describe("Threads OAuth", () => {
   });
 
   it("exchanges an authorization code", async () => {
+    vi.stubEnv("THREADS_REQUEST_TIMEOUT_MS", "2345");
+    const timeout = vi.spyOn(AbortSignal, "timeout");
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -51,6 +55,11 @@ describe("Threads OAuth", () => {
     const calledUrl = new URL(vi.mocked(fetch).mock.calls[0][0] as string);
     expect(calledUrl.pathname).toBe("/oauth/access_token");
     expect(calledUrl.searchParams.get("grant_type")).toBe("authorization_code");
+    expect(vi.mocked(fetch).mock.calls[0][1]).toEqual(expect.objectContaining({
+      method: "POST",
+      signal: expect.any(AbortSignal),
+    }));
+    expect(timeout).toHaveBeenCalledWith(2345);
   });
 
   it("exchanges a short-lived token for a long-lived token", async () => {
@@ -70,6 +79,23 @@ describe("Threads OAuth", () => {
     expect(calledUrl.pathname).toBe("/access_token");
     expect(calledUrl.searchParams.get("grant_type")).toBe("th_exchange_token");
     expect(calledUrl.searchParams.get("access_token")).toBe("short");
+    expect(vi.mocked(fetch).mock.calls[0][1]).toEqual(expect.objectContaining({
+      signal: expect.any(AbortSignal),
+    }));
+  });
+
+  it("classifies OAuth network failures as retryable without leaking tokens", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(
+      new Error("socket failed while sending short-secret-token")
+    ));
+
+    const error = await exchangeLongLivedThreadsToken("short-secret-token")
+      .catch((value) => value);
+
+    expect(error).toBeInstanceOf(ThreadsApiError);
+    expect(error.retryable).toBe(true);
+    expect(error.status).toBe(0);
+    expect(error.message).not.toContain("short-secret-token");
   });
 });
 

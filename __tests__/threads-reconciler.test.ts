@@ -183,6 +183,25 @@ describe("Threads polling reconciliation", () => {
     expect(mocks.campaignFindMany).toHaveBeenCalledTimes(2);
   });
 
+  it("starts a new sweep after the active sweep rejects", async () => {
+    mocks.campaignFindMany
+      .mockRejectedValueOnce(new Error("database unavailable"))
+      .mockResolvedValueOnce([]);
+
+    const first = reconcileThreadsReplies();
+    const concurrent = reconcileThreadsReplies();
+    await expect(Promise.allSettled([first, concurrent])).resolves.toEqual([
+      expect.objectContaining({ status: "rejected" }),
+      expect.objectContaining({ status: "rejected" }),
+    ]);
+
+    await expect(reconcileThreadsReplies()).resolves.toEqual({
+      conversations: 0,
+      observed: 0,
+    });
+    expect(mocks.campaignFindMany).toHaveBeenCalledTimes(2);
+  });
+
   it("does not list owned posts for a specific-only account", async () => {
     mocks.campaignFindMany.mockResolvedValue([
       campaign("account-1", { postId: "specific" }),

@@ -3,6 +3,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { requireEnv } from "@/lib/env";
+import { threadsFetch } from "@/lib/threads/fetch";
 
 const AUTHORIZE_URL = "https://threads.net/oauth/authorize";
 const GRAPH_URL = "https://graph.threads.net";
@@ -101,7 +102,7 @@ export async function exchangeThreadsCode(
     grant_type: "authorization_code",
     redirect_uri: redirectUri,
   }).toString();
-  const response = await fetch(url, { method: "POST" });
+  const response = await threadsFetch(url, { method: "POST" });
   const data = await readTokenResponse<{
     access_token: string;
     user_id: string | number;
@@ -118,7 +119,7 @@ export async function exchangeLongLivedThreadsToken(
     client_secret: requireEnv("THREADS_APP_SECRET"),
     access_token: shortLivedToken,
   }).toString();
-  const response = await fetch(url);
+  const response = await threadsFetch(url);
   const data = await readTokenResponse<{
     access_token: string;
     expires_in: number;
