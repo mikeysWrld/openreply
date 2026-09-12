@@ -49,7 +49,7 @@ describe("campaign channel navigation", () => {
   it("only fetches and renders owned posts for specific-post targeting", () => {
     const form = readFileSync("components/threads-campaign-form.tsx", "utf8");
     expect(form).toContain("if (!accountId || matchAnyPost)");
-    expect(form).toContain("}, [accountId, matchAnyPost])");
+    expect(form).toContain("}, [accountId, matchAnyPost, postsAttempt])");
     expect(form).toContain("{!matchAnyPost && (");
   });
 
@@ -71,6 +71,16 @@ describe("campaign channel navigation", () => {
     expect(form).toContain("Publish a Threads post first");
     expect(form).toContain('role="alert"');
     expect(form).toContain('aria-live="polite"');
+  });
+
+  it("retries only the owned-post loader and validates its success payload", () => {
+    const form = readFileSync("components/threads-campaign-form.tsx", "utf8");
+    expect(form).toContain("const [postsAttempt, setPostsAttempt]");
+    expect(form).toContain("function retryPosts()");
+    expect(form).toContain("setPostsAttempt((attempt) => attempt + 1)");
+    expect(form).toContain("}, [accountId, matchAnyPost, postsAttempt])");
+    expect(form).toContain("if (!Array.isArray(payload.data))");
+    expect(form).toContain('role="status"');
   });
 
   it("lets managers delete a Threads campaign", () => {
@@ -97,6 +107,14 @@ describe("campaign channel navigation", () => {
     expect(list).toContain("loadError && campaigns.length > 0");
     expect(list).toContain("loadError && campaigns.length === 0");
     expect(list).toContain("campaigns.length > 0 &&");
+  });
+
+  it("makes overlapping campaign-list loads latest-wins", () => {
+    const list = readFileSync("app/(dashboard)/campaigns/threads/page.tsx", "utf8");
+    expect(list).toContain("const loadRequestIdRef = useRef(0)");
+    expect(list).toContain("const requestId = ++loadRequestIdRef.current");
+    expect(list).toContain("requestId !== loadRequestIdRef.current");
+    expect(list).toContain("loadRequestIdRef.current += 1");
   });
 
   it("keeps mutation failures visible and prevents repeated campaign actions", () => {
@@ -135,14 +153,18 @@ describe("campaign channel navigation", () => {
     expect(form).toContain("setCampaignAttempt((attempt) => attempt + 1)");
   });
 
-  it("always releases the saving state and reports response, JSON, and API failures", () => {
+  it("keeps a successful save locked through navigation and unlocks only on failure", () => {
     const form = readFileSync("components/threads-campaign-form.tsx", "utf8");
     const submit = form.slice(form.indexOf("async function submit"));
     expect(submit).toContain("try {");
     expect(submit).toContain("if (!response.ok || !payload.success)");
+    expect(form).toContain("const submitInFlightRef = useRef(false)");
+    expect(submit).toContain("if (submitInFlightRef.current) return");
+    expect(submit).toContain("submitInFlightRef.current = true");
     expect(submit).toContain("catch (saveError");
-    expect(submit).toContain("finally");
+    expect(submit).toContain("submitInFlightRef.current = false");
     expect(submit).toContain("setSaving(false)");
+    expect(submit).not.toContain("finally");
   });
 
   it("labels all-post campaigns without linking to a post", () => {

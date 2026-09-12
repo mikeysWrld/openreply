@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 const DEFAULT_KEYWORDS = [
@@ -46,6 +46,7 @@ export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
   const [campaignLoadError, setCampaignLoadError] = useState("");
   const [accountsAttempt, setAccountsAttempt] = useState(0);
   const [campaignAttempt, setCampaignAttempt] = useState(0);
+  const [postsAttempt, setPostsAttempt] = useState(0);
   const [name, setName] = useState("Threads 公開回覆");
   const [accountId, setAccountId] = useState("");
   const [matchAnyPost, setMatchAnyPost] = useState(true);
@@ -57,6 +58,7 @@ export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
   const [isActive, setIsActive] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const submitInFlightRef = useRef(false);
 
   useEffect(() => {
     let ignore = false;
@@ -143,11 +145,14 @@ export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
     if (!accountId || matchAnyPost) return;
     fetch(`/api/threads/posts?threadsAccountId=${encodeURIComponent(accountId)}`)
       .then(async (response) => {
-        const payload = await response.json();
+        const payload = await response.json() as ApiPayload;
         if (!response.ok || !payload.success) {
           throw new Error(payload.error || "Could not load Threads posts");
         }
-        return payload.data ?? [];
+        if (!Array.isArray(payload.data)) {
+          throw new Error("Could not load Threads posts");
+        }
+        return payload.data as Post[];
       })
       .then((nextPosts) => {
         if (!ignore) {
@@ -157,7 +162,6 @@ export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
       })
       .catch((loadError: unknown) => {
         if (!ignore) {
-          setPosts([]);
           setPostsError(loadError instanceof Error ? loadError.message : "Could not load Threads posts");
         }
       })
@@ -165,12 +169,20 @@ export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
         if (!ignore) setPostsLoading(false);
       });
     return () => { ignore = true; };
-  }, [accountId, matchAnyPost]);
+  }, [accountId, matchAnyPost, postsAttempt]);
+
+  function retryPosts() {
+    setPostsLoading(true);
+    setPostsError("");
+    setPostsAttempt((attempt) => attempt + 1);
+  }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (submitInFlightRef.current) return;
     if (saving) return;
     if (!accountId || (!matchAnyPost && (!postId || !postUrl))) return;
+    submitInFlightRef.current = true;
     setSaving(true);
     setError("");
     try {
@@ -200,7 +212,7 @@ export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
       router.refresh();
     } catch (saveError: unknown) {
       setError(errorMessage(saveError, "Could not save Threads campaign"));
-    } finally {
+      submitInFlightRef.current = false;
       setSaving(false);
     }
   }
@@ -241,14 +253,17 @@ export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
         </div>
       </fieldset>
       {!matchAnyPost && (
-        <label className="block text-sm font-semibold">Threads post
-          <select className="mt-2 w-full rounded border border-border bg-surface px-4 py-3" value={postId} onChange={(e) => { const selectedPost = posts.find((post) => post.id === e.target.value); setPostId(e.target.value); setPostUrl(selectedPost?.permalink ?? ""); }} required disabled={postsLoading}>
-            <option value="">{postsLoading ? "Loading posts…" : "Choose a post"}</option>
-            {posts.map((post) => <option key={post.id} value={post.id}>{post.text?.slice(0, 90) || post.id}</option>)}
-          </select>
-          {postsError && <span role="alert" className="mt-2 block text-xs font-normal text-error">{postsError}</span>}
+        <div>
+          <label className="block text-sm font-semibold">Threads post
+            <select className="mt-2 w-full rounded border border-border bg-surface px-4 py-3" value={postId} onChange={(e) => { const selectedPost = posts.find((post) => post.id === e.target.value); setPostId(e.target.value); setPostUrl(selectedPost?.permalink ?? ""); }} required disabled={postsLoading}>
+              <option value="">{postsLoading ? "Loading posts…" : "Choose a post"}</option>
+              {posts.map((post) => <option key={post.id} value={post.id}>{post.text?.slice(0, 90) || post.id}</option>)}
+            </select>
+          </label>
+          {postsLoading && <span role="status" className="mt-2 block text-xs font-normal text-muted">Loading Threads posts…</span>}
+          {postsError && <span role="alert" className="mt-2 block text-xs font-normal text-error">{postsError}<button type="button" onClick={retryPosts} className="ml-2 rounded border border-border px-2 py-1 text-foreground">Retry</button></span>}
           {accountId && !postsLoading && !postsError && posts.length === 0 && <span aria-live="polite" className="mt-2 block text-xs font-normal text-muted">No Threads posts found. Publish a Threads post first.</span>}
-        </label>
+        </div>
       )}
       <label className="block text-sm font-semibold">Keywords
         <input className="mt-2 w-full rounded border border-border bg-surface px-4 py-3" value={keywords} onChange={(e) => setKeywords(e.target.value)} required />
