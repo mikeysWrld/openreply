@@ -1,11 +1,18 @@
-import { Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/db/client";
 import { getThreadsReplyQueue } from "@/lib/queue/client";
 import type { ThreadsReply } from "@/lib/threads/client";
 import { isOwnThreadsReply, normalizeThreadsReply } from "@/lib/threads/replies";
 import { matchKeywords } from "@/lib/utils/keyword-matcher";
 
-class ProcessedThreadsReplyAlreadyClaimedError extends Error {}
+type TransactionOutcome =
+  | { kind: "seen" }
+  | { kind: "no_match" }
+  | {
+      kind: "matched";
+      logId: string;
+      campaignId: string;
+      replyMessage: string;
+    };
 
 export async function processObservedThreadsReply(input: {
   threadsAccountId: string;
@@ -21,33 +28,17 @@ export async function processObservedThreadsReply(input: {
   if (isOwnThreadsReply(input.reply, account.threadsUserId)) return "self";
 
   const normalized = normalizeThreadsReply(input.reply);
-  let selected:
-    | {
-        logId: string;
-        campaignId: string;
-        replyMessage: string;
-      }
-    | null;
-
-  try {
-    selected = await prisma.$transaction(async (transaction) => {
-      try {
-        await transaction.processedThreadsReply.create({
-          data: {
-            threadsAccountId: input.threadsAccountId,
-            replyId: input.reply.id,
-            source: input.source,
-          },
-        });
-      } catch (error) {
-        if (
-          error instanceof Prisma.PrismaClientKnownRequestError &&
-          error.code === "P2002"
-        ) {
-          throw new ProcessedThreadsReplyAlreadyClaimedError();
-        }
-        throw error;
-      }
+  const outcome: TransactionOutcome = await prisma.$transaction(
+    async (transaction) => {
+      const claim = await transaction.processedThreadsReply.createMany({
+        data: {
+          threadsAccountId: input.threadsAccountId,
+          replyId: input.reply.id,
+          source: input.source,
+        },
+        skipDuplicates: true,
+      });
+      if (claim.count === 0) return { kind: "seen" };
 
       const campaigns = await transaction.threadsCampaign.findMany({
         where: {
@@ -92,34 +83,31 @@ export async function processObservedThreadsReply(input: {
         });
 
         return {
+          kind: "matched",
           logId: log.id,
           campaignId: campaign.id,
           replyMessage: campaign.replyMessage,
-        };
+        } as const;
       }
 
-      return null;
-    });
-  } catch (error) {
-    if (error instanceof ProcessedThreadsReplyAlreadyClaimedError) {
-      return "seen";
-    }
-    throw error;
-  }
+      return { kind: "no_match" };
+    },
+  );
 
-  if (!selected) return "no_match";
+  if (outcome.kind === "seen") return "seen";
+  if (outcome.kind === "no_match") return "no_match";
 
   await getThreadsReplyQueue().add(
     "publish-thread-reply",
     {
       threadsAccountId: input.threadsAccountId,
-      threadsCampaignId: selected.campaignId,
-      threadsReplyLogId: selected.logId,
+      threadsCampaignId: outcome.campaignId,
+      threadsReplyLogId: outcome.logId,
       replyId: normalized.id,
-      replyMessage: selected.replyMessage,
+      replyMessage: outcome.replyMessage,
     },
     {
-      jobId: `threads_${input.threadsAccountId}_${normalized.id}_${selected.campaignId}`,
+      jobId: `threads_${input.threadsAccountId}_${normalized.id}_${outcome.campaignId}`,
     },
   );
   return "queued";

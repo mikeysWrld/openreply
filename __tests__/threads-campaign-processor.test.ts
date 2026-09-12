@@ -3,24 +3,40 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   accountFindUnique: vi.fn(),
   transaction: vi.fn(),
-  processedCreate: vi.fn(),
+  processedCreateMany: vi.fn(),
   campaignFindMany: vi.fn(),
   logCreate: vi.fn(),
+  pendingFindMany: vi.fn(),
+  queueGetJob: vi.fn(),
   queueAdd: vi.fn(),
+}));
+
+const transactionState = vi.hoisted(() => ({
+  markers: new Map<string, {
+    threadsAccountId: string;
+    replyId: string;
+    source: string;
+  }>(),
+  logs: [] as Array<Record<string, unknown> & { id: string; status: string }>,
+  tail: Promise.resolve(),
 }));
 
 vi.mock("@/lib/db/client", () => ({
   prisma: {
     threadsAccount: { findUnique: mocks.accountFindUnique },
     $transaction: mocks.transaction,
+    threadsReplyLog: { findMany: mocks.pendingFindMany },
   },
 }));
 
 vi.mock("@/lib/queue/client", () => ({
-  getThreadsReplyQueue: () => ({ add: mocks.queueAdd }),
+  getThreadsReplyQueue: () => ({
+    add: mocks.queueAdd,
+    getJob: mocks.queueGetJob,
+  }),
 }));
 
-import { Prisma } from "../app/generated/prisma/client";
+import { recoverPendingThreadsReplies } from "../lib/polling/threads-reply-recovery";
 import { processObservedThreadsReply } from "../lib/threads/campaign-processor";
 
 const input = {
@@ -57,19 +73,78 @@ function campaign(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  transactionState.markers.clear();
+  transactionState.logs.length = 0;
+  transactionState.tail = Promise.resolve();
   mocks.accountFindUnique.mockResolvedValue({
     threadsUserId: "owner_1",
     workspaceId: "workspace_1",
   });
-  mocks.processedCreate.mockResolvedValue({ id: "processed_1" });
+  mocks.processedCreateMany.mockResolvedValue(undefined);
   mocks.campaignFindMany.mockResolvedValue([]);
-  mocks.logCreate.mockResolvedValue({ id: "log_1" });
+  mocks.logCreate.mockResolvedValue(undefined);
+  mocks.pendingFindMany.mockImplementation(() =>
+    transactionState.logs
+      .filter((log) => log.status === "PENDING")
+      .map((log) => ({
+        ...log,
+        threadsCampaign: { replyMessage: log.replyMessage },
+      })),
+  );
+  mocks.queueGetJob.mockResolvedValue(undefined);
   mocks.queueAdd.mockResolvedValue(undefined);
-  mocks.transaction.mockImplementation((callback) => callback({
-    processedThreadsReply: { create: mocks.processedCreate },
-    threadsCampaign: { findMany: mocks.campaignFindMany },
-    threadsReplyLog: { create: mocks.logCreate },
-  }));
+  mocks.transaction.mockImplementation(async (callback) => {
+    const previousTransaction = transactionState.tail;
+    let releaseTransaction = () => {};
+    transactionState.tail = new Promise<void>((resolve) => {
+      releaseTransaction = resolve;
+    });
+    await previousTransaction;
+
+    const stagedMarkers = new Map(transactionState.markers);
+    const stagedLogs = [...transactionState.logs];
+    try {
+      const result = await callback({
+        processedThreadsReply: {
+          createMany: async (args: {
+            data: {
+              threadsAccountId: string;
+              replyId: string;
+              source: string;
+            };
+            skipDuplicates: boolean;
+          }) => {
+            await mocks.processedCreateMany(args);
+            const key = `${args.data.threadsAccountId}:${args.data.replyId}`;
+            if (stagedMarkers.has(key)) return { count: 0 };
+            stagedMarkers.set(key, args.data);
+            return { count: 1 };
+          },
+        },
+        threadsCampaign: { findMany: mocks.campaignFindMany },
+        threadsReplyLog: {
+          create: async (args: { data: Record<string, unknown> }) => {
+            const injected = await mocks.logCreate(args);
+            const log = {
+              id: injected?.id ?? `log_${stagedLogs.length + 1}`,
+              ...args.data,
+              status: "PENDING",
+            };
+            stagedLogs.push(log);
+            return log;
+          },
+        },
+      });
+      transactionState.markers.clear();
+      for (const [key, marker] of stagedMarkers) {
+        transactionState.markers.set(key, marker);
+      }
+      transactionState.logs.splice(0, transactionState.logs.length, ...stagedLogs);
+      return result;
+    } finally {
+      releaseTransaction();
+    }
+  });
 });
 
 describe("Threads campaign reply selection", () => {
@@ -78,6 +153,14 @@ describe("Threads campaign reply selection", () => {
 
     await expect(processObservedThreadsReply(input)).resolves.toBe("queued");
 
+    expect(mocks.processedCreateMany).toHaveBeenCalledWith({
+      data: {
+        threadsAccountId: "account_1",
+        replyId: "reply_1",
+        source: "WEBHOOK",
+      },
+      skipDuplicates: true,
+    });
     expect(mocks.logCreate).toHaveBeenCalledOnce();
     expect(mocks.logCreate).toHaveBeenCalledWith({
       data: {
@@ -181,25 +264,26 @@ describe("Threads campaign reply selection", () => {
     });
 
     expect(result).toBe("self");
-    expect(mocks.processedCreate).not.toHaveBeenCalled();
+    expect(mocks.processedCreateMany).not.toHaveBeenCalled();
     expect(mocks.campaignFindMany).not.toHaveBeenCalled();
     expect(mocks.logCreate).not.toHaveBeenCalled();
     expect(mocks.queueAdd).not.toHaveBeenCalled();
   });
 
-  it("returns seen and queues nothing for a duplicate processed reply", async () => {
-    mocks.processedCreate.mockRejectedValue(
-      new Prisma.PrismaClientKnownRequestError("duplicate", {
-        code: "P2002",
-        clientVersion: "test",
-      })
-    );
+  it("lets only one concurrent observation commit and queue", async () => {
+    mocks.campaignFindMany.mockResolvedValue([campaign()]);
 
-    await expect(processObservedThreadsReply(input)).resolves.toBe("seen");
+    const results = await Promise.all([
+      processObservedThreadsReply(input),
+      processObservedThreadsReply(input),
+    ]);
 
-    expect(mocks.campaignFindMany).not.toHaveBeenCalled();
-    expect(mocks.logCreate).not.toHaveBeenCalled();
-    expect(mocks.queueAdd).not.toHaveBeenCalled();
+    expect(results.sort()).toEqual(["queued", "seen"]);
+    expect(transactionState.markers).toHaveLength(1);
+    expect(transactionState.logs).toHaveLength(1);
+    expect(mocks.campaignFindMany).toHaveBeenCalledOnce();
+    expect(mocks.logCreate).toHaveBeenCalledOnce();
+    expect(mocks.queueAdd).toHaveBeenCalledOnce();
   });
 
   it("retries the reply after a campaign lookup failure rolls back its marker", async () => {
@@ -210,30 +294,35 @@ describe("Threads campaign reply selection", () => {
     await expect(processObservedThreadsReply(input)).rejects.toThrow(
       "campaign lookup failed",
     );
+    expect(transactionState.markers).toHaveLength(0);
+    expect(transactionState.logs).toHaveLength(0);
     await expect(processObservedThreadsReply(input)).resolves.toBe("queued");
 
     expect(mocks.transaction).toHaveBeenCalledTimes(2);
-    expect(mocks.processedCreate).toHaveBeenCalledTimes(2);
+    expect(mocks.processedCreateMany).toHaveBeenCalledTimes(2);
+    expect(transactionState.markers).toHaveLength(1);
+    expect(transactionState.logs).toHaveLength(1);
     expect(mocks.logCreate).toHaveBeenCalledOnce();
     expect(mocks.queueAdd).toHaveBeenCalledOnce();
   });
 
-  it("retries the reply after a reply-log P2002 rolls back its marker", async () => {
+  it("retries the reply after a reply-log failure rolls back its marker and log", async () => {
     mocks.campaignFindMany.mockResolvedValue([campaign()]);
     mocks.logCreate
-      .mockRejectedValueOnce(
-        new Prisma.PrismaClientKnownRequestError("reply log conflict", {
-          code: "P2002",
-          clientVersion: "test",
-        }),
-      )
-      .mockResolvedValueOnce({ id: "log_1" });
+      .mockRejectedValueOnce(new Error("reply log failed"))
+      .mockResolvedValueOnce(undefined);
 
-    await expect(processObservedThreadsReply(input)).rejects.toThrow();
+    await expect(processObservedThreadsReply(input)).rejects.toThrow(
+      "reply log failed",
+    );
+    expect(transactionState.markers).toHaveLength(0);
+    expect(transactionState.logs).toHaveLength(0);
     await expect(processObservedThreadsReply(input)).resolves.toBe("queued");
 
     expect(mocks.transaction).toHaveBeenCalledTimes(2);
-    expect(mocks.processedCreate).toHaveBeenCalledTimes(2);
+    expect(mocks.processedCreateMany).toHaveBeenCalledTimes(2);
+    expect(transactionState.markers).toHaveLength(1);
+    expect(transactionState.logs).toHaveLength(1);
     expect(mocks.logCreate).toHaveBeenCalledTimes(2);
     expect(mocks.queueAdd).toHaveBeenCalledOnce();
   });
@@ -242,8 +331,40 @@ describe("Threads campaign reply selection", () => {
     await expect(processObservedThreadsReply(input)).resolves.toBe("no_match");
 
     expect(mocks.transaction).toHaveBeenCalledOnce();
-    expect(mocks.processedCreate).toHaveBeenCalledOnce();
+    expect(mocks.processedCreateMany).toHaveBeenCalledOnce();
+    expect(transactionState.markers).toHaveLength(1);
+    expect(transactionState.logs).toHaveLength(0);
     expect(mocks.logCreate).not.toHaveBeenCalled();
     expect(mocks.queueAdd).not.toHaveBeenCalled();
+  });
+
+  it("recovers a committed pending log after the first queue add fails", async () => {
+    mocks.campaignFindMany.mockResolvedValue([campaign()]);
+    mocks.queueAdd
+      .mockRejectedValueOnce(new Error("queue unavailable"))
+      .mockResolvedValueOnce(undefined);
+
+    await expect(processObservedThreadsReply(input)).rejects.toThrow(
+      "queue unavailable",
+    );
+    expect(transactionState.markers).toHaveLength(1);
+    expect(transactionState.logs).toHaveLength(1);
+    expect(transactionState.logs[0]).toEqual(
+      expect.objectContaining({ id: "log_1", status: "PENDING" }),
+    );
+
+    await expect(recoverPendingThreadsReplies()).resolves.toBe(1);
+
+    expect(mocks.queueAdd).toHaveBeenLastCalledWith(
+      "publish-thread-reply",
+      {
+        threadsAccountId: "account_1",
+        threadsCampaignId: "campaign_1",
+        threadsReplyLogId: "log_1",
+        replyId: "reply_1",
+        replyMessage: "Here is the link",
+      },
+      { jobId: "threads_account_1_reply_1_campaign_1" },
+    );
   });
 });
