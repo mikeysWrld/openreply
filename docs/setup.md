@@ -246,24 +246,31 @@ If you want to inspect where a comment stopped, the Postgres tables tell you: `W
 
 Threads is a separate campaign channel. A campaign can monitor either one specific post owned by your connected Threads profile or all posts owned by that profile. It watches top-level and nested replies in those posts' conversations. A keyword match publishes a public reply; Threads campaigns never send private messages and do not alter Instagram campaigns.
 
-An **All posts** campaign includes posts that already exist when you create it and posts you publish after you create or activate it. On every sweep, the worker rediscovers the account's newest owned posts before polling their conversations, so you do not need to recreate the campaign when you publish something new.
+An **All posts** campaign includes the account's newest existing posts, up to `THREADS_POLL_MAX_POSTS_PER_SWEEP`, plus posts you publish after you create or activate it while they remain within that newest-post window. On every sweep, the worker rediscovers the account's newest owned posts before polling their conversations, so newly published posts enter coverage without recreating the campaign. Older history beyond the configured post cap is not covered unless you raise the cap deliberately.
 
 ### Meta Threads API setup
 
 1. In the same Meta app, open **Use cases**, choose **Add use cases**, select **Access the Threads API**, and save.
-2. In the Threads use case, register this exact redirect URI for production:
+2. In the Threads use case, register this exact redirect URI, replacing the host with your own Vercel domain:
 
-   `https://openreply-umber-six.vercel.app/api/threads/callback`
+   `https://your-app.vercel.app/api/threads/callback`
+
+   Its origin must exactly match `NEXTAUTH_URL`, including the scheme and host. For example, if `NEXTAUTH_URL` is `https://openreply.example.com`, register `https://openreply.example.com/api/threads/callback`. Do not add a trailing slash.
 
 3. Enable the minimum permissions used by OpenReply:
    - `threads_basic`
    - `threads_read_replies`
    - `threads_content_publish`
-4. Copy the Threads App ID and Threads App Secret into both the web and worker environments:
+4. Add the Threads OAuth credentials to the web app environment in Vercel:
 
    ```env
    THREADS_APP_ID=...
    THREADS_APP_SECRET=...
+   ```
+
+   Add the Threads polling settings to the always-on worker environment:
+
+   ```env
    THREADS_POLL_INTERVAL_MS=300000
    THREADS_POLL_MAX_PER_SWEEP=30
    THREADS_POLL_MAX_POSTS_PER_SWEEP=100
@@ -271,15 +278,23 @@ An **All posts** campaign includes posts that already exist when you create it a
 
    `THREADS_POLL_MAX_POSTS_PER_SWEEP` is the per-account cap on newest owned posts rediscovered during each sweep. The default of `100` is intentionally bounded; accounts that need to monitor older history beyond that cap can raise it deliberately after considering the additional API traffic.
 
+   The web app and worker still need the shared database, Redis, and `ENCRYPTION_KEY` settings documented earlier. The worker reads the encrypted account token from the shared database and does not need `THREADS_APP_ID` or `THREADS_APP_SECRET`.
+
 5. Add the profile as a tester if Meta requires it while the app is in development mode, and accept the authorization from the Threads profile. This tester permission and profile authorization are outstanding operator steps until you complete them in Meta and Threads; repository setup does not complete App Review or grant them automatically.
-6. Redeploy both Vercel and the always-on worker after adding the variables.
+6. When deploying, redeploy Vercel after adding the OAuth variables and redeploy the always-on worker after adding the polling variables.
 7. In OpenReply, open **Settings**, click **Connect Threads**, approve the three permissions, and return to Settings.
 
 Threads reply detection uses a conservative worker poll of each active campaign's flattened conversations. For **All posts**, each sweep first rediscovers the account's newest owned posts up to the configured cap. `ProcessedThreadsReply` records every observed reply, including non-matches, and `ThreadsReplyLog` records matched sends and failures. Self-authored replies are ignored and unique constraints prevent duplicate responses.
 
 ### First Threads campaign
 
-Open **Campaigns → Threads Campaigns → New Threads Campaign**, select **All posts**, and keep the campaign paused during initial setup. The prepared campaign uses these keywords:
+Open **Campaigns → Threads Campaigns → New Threads Campaign**, select **All posts**, and keep the campaign paused during initial setup. Prefer a dedicated or clean tester profile for the first activation.
+
+> **First-activation safety:** A paused campaign does not baseline `ProcessedThreadsReply`. Its first active sweep can inspect recent historical replies on every discovered post—up to the post cap multiplied by the per-conversation reply cap. If you activate it with broad production keywords, matching historical replies can trigger a burst of retroactive public responses.
+
+For the first test, generate a unique nonce keyword that is guaranteed not to appear in the profile's reply history, such as `OPENREPLY_TEST_7F3C9A`. Configure that nonce as the campaign's **only** keyword and keep the campaign paused while saving it. Do not use the broad production keywords for the first activation.
+
+The approved production keywords, to restore later while the campaign is paused, are:
 
 `golfr`, `golf`, `interested`, `cool`, `website`, `golfer`, `free`
 
@@ -287,9 +302,11 @@ The prepared Traditional Chinese public reply is:
 
 `感謝你的關注！立即加入 Beta 測試名單：https://golfr.ai/`
 
-For the end-to-end test, activate the campaign, then use a different Threads account to post one matching reply on an existing owned post. Publish a new post from the connected profile and add one matching reply to it from that same different account. Confirm that each matching reply receives exactly one Traditional Chinese public reply and appears as sent in the Threads campaign counts. Also post one non-matching reply and one reply from the connected profile itself; neither must receive a response.
+Activate the campaign with only the nonce keyword. From a different Threads account, post the nonce as one reply on an existing owned post. Then publish a new post from the connected profile and reply to it with the same nonce from the different account. Also post one non-matching reply and one nonce reply from the connected profile itself. Allow a complete worker sweep to process the test replies and mark every other observed historical reply as processed.
 
-Return the campaign to paused immediately after the test run and keep it paused until every check above succeeds. Activate it for ongoing use only after the end-to-end test succeeds.
+Confirm that each of the two matching replies from the different account receives exactly one Traditional Chinese public reply and appears as sent in the Threads campaign counts. The non-match and self-authored reply must receive none. Pause the campaign immediately after the sweep, then review the Threads reply logs for any unexpected sends.
+
+Only after those checks succeed, restore the approved production keywords while the campaign remains paused. Review the target, keyword list, response, and logs once more. Do not activate the production settings for ongoing use until that review is safe.
 
 ## Local development
 
