@@ -12,6 +12,13 @@ interface ThreadsCampaignGroup {
   campaigns: Array<{ postId: string | null; matchAnyPost: boolean }>;
 }
 
+interface ThreadsReconciliationResult {
+  conversations: number;
+  observed: number;
+}
+
+let activeSweep: Promise<ThreadsReconciliationResult> | null = null;
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown error";
 }
@@ -23,10 +30,7 @@ function positiveInteger(value: string | undefined, fallback: number): number {
   return Math.max(1, Math.floor(parsed));
 }
 
-export async function reconcileThreadsReplies(): Promise<{
-  conversations: number;
-  observed: number;
-}> {
+async function runThreadsReconciliation(): Promise<ThreadsReconciliationResult> {
   const campaigns = await prisma.threadsCampaign.findMany({
     where: { isActive: true },
     select: {
@@ -123,4 +127,20 @@ export async function reconcileThreadsReplies(): Promise<{
     }
   }
   return { conversations, observed };
+}
+
+export function reconcileThreadsReplies(): Promise<ThreadsReconciliationResult> {
+  if (activeSweep) return activeSweep;
+
+  const sweep = runThreadsReconciliation();
+  activeSweep = sweep;
+  void sweep.then(
+    () => {
+      if (activeSweep === sweep) activeSweep = null;
+    },
+    () => {
+      if (activeSweep === sweep) activeSweep = null;
+    }
+  );
+  return sweep;
 }

@@ -1,4 +1,18 @@
 const GRAPH_URL = "https://graph.threads.net";
+const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+
+export type ThreadsContainerStatusValue =
+  | "IN_PROGRESS"
+  | "FINISHED"
+  | "PUBLISHED"
+  | "ERROR"
+  | "EXPIRED";
+
+export interface ThreadsContainerStatus {
+  id: string;
+  status: ThreadsContainerStatusValue;
+  error_message?: string;
+}
 
 export interface ThreadsProfile {
   id: string;
@@ -59,10 +73,37 @@ function graphUrl(path: string, token: string, params?: Record<string, string>) 
   return url;
 }
 
+function requestTimeoutMs(): number {
+  const configured = process.env.THREADS_REQUEST_TIMEOUT_MS;
+  if (configured === undefined) return DEFAULT_REQUEST_TIMEOUT_MS;
+  const parsed = Number(configured);
+  return Number.isFinite(parsed) && Number.isInteger(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_REQUEST_TIMEOUT_MS;
+}
+
+async function threadsFetch(
+  input: string | URL,
+  init: RequestInit = {}
+): Promise<Response> {
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: AbortSignal.timeout(requestTimeoutMs()),
+    });
+  } catch (error) {
+    const reason =
+      error instanceof Error && error.name === "AbortError"
+        ? "timed out"
+        : "failed before receiving a response";
+    throw new ThreadsApiError(`Threads API request ${reason}`, 0, null, true);
+  }
+}
+
 export async function getThreadsProfile(
   accessToken: string
 ): Promise<ThreadsProfile> {
-  const response = await fetch(
+  const response = await threadsFetch(
     graphUrl("/me", accessToken, {
       fields: "id,username,threads_profile_picture_url,threads_biography",
     })
@@ -74,7 +115,7 @@ async function getPaged<T>(initialUrl: URL, max: number): Promise<T[]> {
   const results: T[] = [];
   let next: string | null = initialUrl.toString();
   while (next && results.length < max) {
-    const response: Response = await fetch(next);
+    const response: Response = await threadsFetch(next);
     const page: {
       data: T[];
       paging?: { next?: string };
@@ -116,13 +157,13 @@ export function getThreadsConversation(
   );
 }
 
-export async function publishThreadsReply(
+export async function createThreadsReplyContainer(
   accessToken: string,
   userId: string,
   replyToId: string,
   text: string
 ): Promise<string> {
-  const createResponse = await fetch(
+  const createResponse = await threadsFetch(
     graphUrl(`/${userId}/threads`, accessToken, {
       media_type: "TEXT",
       text,
@@ -131,10 +172,29 @@ export async function publishThreadsReply(
     { method: "POST" }
   );
   const container = await readResponse<{ id: string }>(createResponse);
+  return container.id;
+}
 
-  const publishResponse = await fetch(
+export async function getThreadsContainerStatus(
+  accessToken: string,
+  containerId: string
+): Promise<ThreadsContainerStatus> {
+  const response = await threadsFetch(
+    graphUrl(`/${containerId}`, accessToken, {
+      fields: "id,status,error_message",
+    })
+  );
+  return readResponse<ThreadsContainerStatus>(response);
+}
+
+export async function publishThreadsReplyContainer(
+  accessToken: string,
+  userId: string,
+  containerId: string
+): Promise<string> {
+  const publishResponse = await threadsFetch(
     graphUrl(`/${userId}/threads_publish`, accessToken, {
-      creation_id: container.id,
+      creation_id: containerId,
     }),
     { method: "POST" }
   );

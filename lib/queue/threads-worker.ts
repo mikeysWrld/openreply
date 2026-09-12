@@ -1,8 +1,13 @@
-import { Worker } from "bullmq";
+import { UnrecoverableError, Worker } from "bullmq";
 import { prisma } from "@/lib/db/client";
 import { decryptToken } from "@/lib/meta/oauth";
 import { getRedisConnection, type ProcessThreadsReplyJob } from "@/lib/queue/client";
-import { publishThreadsReply } from "@/lib/threads/client";
+import {
+  ThreadsApiError,
+  createThreadsReplyContainer,
+  getThreadsContainerStatus,
+  publishThreadsReplyContainer,
+} from "@/lib/threads/client";
 
 export async function processThreadsReplyJob(
   data: ProcessThreadsReplyJob
@@ -18,12 +23,47 @@ export async function processThreadsReplyJob(
   if (!log || log.status === "SENT") return;
 
   try {
-    const publishedReplyId = await publishThreadsReply(
-      decryptToken(log.threadsAccount.accessToken),
-      log.threadsAccount.threadsUserId,
-      data.replyId,
-      data.replyMessage
-    );
+    const accessToken = decryptToken(log.threadsAccount.accessToken);
+    let containerId = log.publishContainerId;
+    if (!containerId) {
+      containerId = await createThreadsReplyContainer(
+        accessToken,
+        log.threadsAccount.threadsUserId,
+        data.replyId,
+        data.replyMessage
+      );
+      await prisma.threadsReplyLog.update({
+        where: { id: log.id },
+        data: { publishContainerId: containerId },
+      });
+    }
+
+    const container = await getThreadsContainerStatus(accessToken, containerId);
+    if (container.status === "IN_PROGRESS") {
+      throw new ThreadsApiError(
+        `Threads reply container ${containerId} is still in progress`,
+        409,
+        null,
+        true
+      );
+    }
+    if (container.status === "ERROR" || container.status === "EXPIRED") {
+      const detail = container.error_message
+        ? `: ${container.error_message}`
+        : "";
+      throw new UnrecoverableError(
+        `Threads reply container ${containerId} is ${container.status.toLowerCase()}${detail}`
+      );
+    }
+
+    const publishedReplyId =
+      container.status === "PUBLISHED"
+        ? log.publishedReplyId
+        : await publishThreadsReplyContainer(
+            accessToken,
+            log.threadsAccount.threadsUserId,
+            containerId
+          );
     await prisma.threadsReplyLog.update({
       where: { id: log.id },
       data: {
@@ -44,6 +84,9 @@ export async function processThreadsReplyJob(
         attempts: { increment: 1 },
       },
     });
+    if (error instanceof ThreadsApiError && !error.retryable) {
+      throw new UnrecoverableError(message);
+    }
     throw error;
   }
 }

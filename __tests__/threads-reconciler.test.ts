@@ -156,6 +156,33 @@ describe("Threads polling reconciliation", () => {
     ]);
   });
 
+  it("shares one active sweep between concurrent callers", async () => {
+    let releaseCampaigns!: (value: ReturnType<typeof campaign>[]) => void;
+    mocks.campaignFindMany.mockReturnValue(new Promise((resolve) => {
+      releaseCampaigns = resolve;
+    }));
+
+    const first = reconcileThreadsReplies();
+    const second = reconcileThreadsReplies();
+    releaseCampaigns([campaign("account-1", { matchAnyPost: true })]);
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { conversations: 0, observed: 0 },
+      { conversations: 0, observed: 0 },
+    ]);
+    expect(mocks.campaignFindMany).toHaveBeenCalledOnce();
+    expect(mocks.getOwnedThreads).toHaveBeenCalledOnce();
+  });
+
+  it("starts a new sweep after the active sweep settles", async () => {
+    mocks.campaignFindMany.mockResolvedValue([]);
+
+    await reconcileThreadsReplies();
+    await reconcileThreadsReplies();
+
+    expect(mocks.campaignFindMany).toHaveBeenCalledTimes(2);
+  });
+
   it("does not list owned posts for a specific-only account", async () => {
     mocks.campaignFindMany.mockResolvedValue([
       campaign("account-1", { postId: "specific" }),
