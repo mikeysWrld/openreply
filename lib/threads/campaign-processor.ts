@@ -36,12 +36,19 @@ export async function processObservedThreadsReply(input: {
   const campaigns = await prisma.threadsCampaign.findMany({
     where: {
       threadsAccountId: input.threadsAccountId,
-      postId: input.rootPostId,
       isActive: true,
+      OR: [
+        { matchAnyPost: true },
+        { matchAnyPost: false, postId: input.rootPostId },
+      ],
     },
+    orderBy: [
+      { matchAnyPost: "asc" },
+      { createdAt: "asc" },
+      { id: "asc" },
+    ],
   });
   const normalized = normalizeThreadsReply(input.reply);
-  let queued = false;
   for (const campaign of campaigns) {
     const match = matchKeywords(
       normalized.text,
@@ -72,7 +79,7 @@ export async function processObservedThreadsReply(input: {
       },
       { jobId: `threads_${input.threadsAccountId}_${normalized.id}_${campaign.id}` }
     );
-    queued = true;
+    return "queued";
   }
-  return queued ? "queued" : "no_match";
+  return "no_match";
 }
