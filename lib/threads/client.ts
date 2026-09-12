@@ -8,6 +8,7 @@ import {
 } from "@/lib/threads/fetch";
 
 const GRAPH_URL = "https://graph.threads.net";
+const THREADS_PERMALINK_DOMAINS = ["threads.net", "threads.com"] as const;
 
 export { ThreadsApiError } from "@/lib/threads/fetch";
 
@@ -156,8 +157,13 @@ export function isCanonicalThreadsPermalink(value: unknown): value is string {
   if (typeof value !== "string" || value.trim().length === 0) return false;
   try {
     const url = new URL(value);
+    const isThreadsHost = THREADS_PERMALINK_DOMAINS.some((domain) =>
+      url.hostname === domain ||
+      (url.hostname.length > domain.length + 1 &&
+        url.hostname.endsWith(`.${domain}`))
+    );
     return url.protocol === "https:" &&
-      (url.hostname === "threads.net" || url.hostname.endsWith(".threads.net")) &&
+      isThreadsHost &&
       url.username === "" &&
       url.password === "" &&
       url.port === "";

@@ -97,6 +97,23 @@ describe("Threads API client", () => {
     expect(request.searchParams.get("access_token")).toBe("secret-token");
   });
 
+  it.each([
+    "https://threads.com/@golfrai/post/current",
+    "https://www.threads.com/@golfrai/post/current",
+  ])("accepts a canonical Threads .com permalink: %s", async (permalink) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      id: "post_1",
+      permalink,
+      owner: { id: "threads_user_1" },
+    }), { status: 200 })));
+
+    await expect(getThreadsPostDetails("secret-token", "post_1")).resolves.toEqual({
+      id: "post_1",
+      permalink,
+      owner: { id: "threads_user_1" },
+    });
+  });
+
   it("keeps an untrusted post ID inside the Threads Graph path", async () => {
     const postId = "//evil.example/path";
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
@@ -129,6 +146,8 @@ describe("Threads API client", () => {
   it.each([
     { permalink: "http://threads.net/@golfrai/post/1", label: "HTTP" },
     { permalink: "https://threads.net.evil.example/@golfrai/post/1", label: "lookalike host" },
+    { permalink: "https://threads.com.evil.example/@golfrai/post/1", label: ".com lookalike suffix" },
+    { permalink: "https://evilthreads.com/@golfrai/post/1", label: ".com lookalike prefix" },
     { permalink: "https://evil.example/@golfrai/post/1", label: "foreign host" },
     { permalink: "https://user:password@threads.net/@golfrai/post/1", label: "credentials" },
     { permalink: "not-a-url", label: "malformed URL" },
