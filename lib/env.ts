@@ -46,6 +46,21 @@ export function getMissingInstagramOAuthEnv(): string[] {
   });
 }
 
+const THREADS_OAUTH_ENV = [
+  "THREADS_APP_ID",
+  "THREADS_APP_SECRET",
+  "ENCRYPTION_KEY",
+  "NEXTAUTH_SECRET",
+] as const;
+
+export function getMissingThreadsOAuthEnv(): string[] {
+  return THREADS_OAUTH_ENV.filter((name) => {
+    const value = process.env[name];
+    if (!value) return true;
+    return name === "ENCRYPTION_KEY" && !HEX_32_BYTE.test(value);
+  });
+}
+
 export function getMetaGraphApiVersion(): string {
   return process.env.META_GRAPH_API_VERSION ?? "v25.0";
 }

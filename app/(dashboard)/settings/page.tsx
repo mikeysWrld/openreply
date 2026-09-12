@@ -47,6 +47,12 @@ interface WorkspaceMembersData {
 
 export default function SettingsPage() {
   const [data, setData] = useState<SettingsData | null>(null);
+  const [threadsAccounts, setThreadsAccounts] = useState<Array<{
+    id: string;
+    username: string;
+    threadsUserId: string;
+    tokenExpiresAt: string | null;
+  }>>([]);
   const [membersData, setMembersData] = useState<WorkspaceMembersData | null>(
     null
   );
@@ -60,10 +66,14 @@ export default function SettingsPage() {
     Promise.all([
       fetch("/api/dashboard/stats").then((res) => res.json()),
       fetch("/api/workspace/members").then((res) => res.json()),
+      fetch("/api/threads/accounts").then((res) => res.json()),
     ])
-      .then(([statsPayload, membersPayload]) => {
+      .then(([statsPayload, membersPayload, threadsPayload]) => {
         if (statsPayload.success) setData(statsPayload.data);
         if (membersPayload.success) setMembersData(membersPayload.data);
+        if (threadsPayload.success) {
+          setThreadsAccounts(threadsPayload.data.threadsAccounts ?? []);
+        }
       })
       .finally(() => setLoading(false));
   }, []);
@@ -84,6 +94,17 @@ export default function SettingsPage() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ instagramAccountId }),
+    });
+    window.location.reload();
+  }
+
+  async function disconnectThreads(threadsAccountId: string) {
+    if (!confirm("Disconnect Threads? Its public-reply campaigns will stop.")) return;
+    setBusy(`threads:${threadsAccountId}`);
+    await fetch("/api/threads/disconnect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ threadsAccountId }),
     });
     window.location.reload();
   }
@@ -214,6 +235,34 @@ export default function SettingsPage() {
             className="px-4 py-2 rounded text-sm font-medium transition-colors bg-accent text-white hover:bg-accent-hover"
           >
             {accounts.length > 0 ? "Connect another account" : "Connect Instagram"}
+          </a>
+        </div>
+      </section>
+
+      <section className="panel rounded p-4 sm:p-6">
+        <h2 className="text-base font-semibold mb-2">Threads Connection</h2>
+        <p className="mb-6 text-xs text-muted">
+          Read replies on your posts and publish keyword-triggered public responses.
+        </p>
+        <div className="space-y-3">
+          {threadsAccounts.map((account) => (
+            <div key={account.id} className="flex flex-col gap-3 rounded border border-border bg-surface/70 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-semibold">@{account.username}</p>
+                <p className="mt-1 text-xs text-muted">
+                  Token expires {account.tokenExpiresAt ? new Date(account.tokenExpiresAt).toLocaleDateString() : "not available"}
+                </p>
+              </div>
+              <button onClick={() => void disconnectThreads(account.id)} disabled={busy === `threads:${account.id}`} className="rounded border border-error/20 px-4 py-2 text-sm font-medium text-error hover:bg-error/10 disabled:opacity-50">
+                {busy === `threads:${account.id}` ? "Disconnecting…" : "Disconnect"}
+              </button>
+            </div>
+          ))}
+          {threadsAccounts.length === 0 && <p className="text-sm text-muted">No Threads profile connected.</p>}
+        </div>
+        <div className="mt-6 border-t border-border pt-4">
+          <a href="/api/threads/connect" className="inline-flex rounded bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover">
+            {threadsAccounts.length ? "Reconnect Threads" : "Connect Threads"}
           </a>
         </div>
       </section>

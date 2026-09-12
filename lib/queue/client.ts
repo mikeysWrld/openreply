@@ -100,3 +100,31 @@ export function getDMQueue(): Queue<DmQueueJob> {
   }
   return dmQueue;
 }
+
+export interface ProcessThreadsReplyJob {
+  threadsAccountId: string;
+  threadsCampaignId: string;
+  threadsReplyLogId: string;
+  replyId: string;
+  replyMessage: string;
+}
+
+let threadsReplyQueue: Queue<ProcessThreadsReplyJob> | null = null;
+
+export function getThreadsReplyQueue(): Queue<ProcessThreadsReplyJob> {
+  if (!threadsReplyQueue) {
+    threadsReplyQueue = new Queue<ProcessThreadsReplyJob>(
+      "threads-reply-processing",
+      {
+        connection: getRedisConnection(),
+        defaultJobOptions: {
+          removeOnComplete: { count: 1000 },
+          removeOnFail: { age: 300, count: 2000 },
+          attempts: 3,
+          backoff: { type: "exponential", delay: 5000 },
+        },
+      }
+    );
+  }
+  return threadsReplyQueue;
+}
