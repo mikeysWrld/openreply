@@ -53,6 +53,26 @@ describe("campaign channel navigation", () => {
     expect(form).toContain("{!matchAnyPost && (");
   });
 
+  it("surfaces owned-post API failures separately from save errors", () => {
+    const form = readFileSync("components/threads-campaign-form.tsx", "utf8");
+    expect(form).toContain('const [postsError, setPostsError] = useState("")');
+    expect(form).toContain("!response.ok || !payload.success");
+    expect(form).toContain('payload.error || "Could not load Threads posts"');
+    expect(form).toContain('setPostsError("")');
+    expect(form).toContain("setPosts([])");
+  });
+
+  it("shows post loading and empty states with accessible errors", () => {
+    const form = readFileSync("components/threads-campaign-form.tsx", "utf8");
+    expect(form).toContain("postsLoading");
+    expect(form).toContain("Loading posts…");
+    expect(form).toContain("disabled={postsLoading}");
+    expect(form).toContain("accountId && !postsLoading && !postsError && posts.length === 0");
+    expect(form).toContain("Publish a Threads post first");
+    expect(form).toContain('role="alert"');
+    expect(form).toContain('aria-live="polite"');
+  });
+
   it("lets managers delete a Threads campaign", () => {
     const list = readFileSync("app/(dashboard)/campaigns/threads/page.tsx", "utf8");
     expect(list).toContain('method: "DELETE"');
