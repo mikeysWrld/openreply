@@ -8,6 +8,7 @@ import {
   getThreadsProfile,
   publishThreadsReplyContainer,
 } from "../lib/threads/client";
+import { readThreadsJson } from "../lib/threads/fetch";
 
 beforeEach(() => {
   vi.unstubAllEnvs();
@@ -16,6 +17,23 @@ beforeEach(() => {
 });
 
 describe("Threads API client", () => {
+  it.each([null, 42, "primitive", []])(
+    "rejects a non-record successful JSON payload: %j",
+    async (payload) => {
+      const error = (await readThreadsJson(
+        new Response(JSON.stringify(payload), { status: 200 }),
+        "Threads API request failed",
+        ["secret-token"]
+      ).catch((value) => value)) as ThreadsApiError;
+
+      expect(error).toBeInstanceOf(ThreadsApiError);
+      expect(error.status).toBe(502);
+      expect(error.retryable).toBe(true);
+      expect(error.message).toBe("Threads API returned an invalid response");
+      expect(error.message).not.toContain("secret-token");
+    }
+  );
+
   it("loads the authenticated profile without exposing the token in the path", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
       JSON.stringify({ id: "42", username: "golfrai" }), { status: 200 }
@@ -27,6 +45,23 @@ describe("Threads API client", () => {
     const url = new URL(vi.mocked(fetch).mock.calls[0][0] as string);
     expect(url.pathname).toBe("/me");
     expect(url.searchParams.get("access_token")).toBe("secret-token");
+  });
+
+  it.each([
+    {},
+    { id: "", username: "golfrai" },
+    { id: "42", username: " " },
+    { id: 42, username: "golfrai" },
+  ])("rejects a malformed profile payload", async (payload) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      JSON.stringify(payload), { status: 200 }
+    )));
+
+    const error = await getThreadsProfile("secret-token").catch((value) => value);
+
+    expect(error).toBeInstanceOf(ThreadsApiError);
+    expect(error.status).toBe(502);
+    expect(error.message).not.toContain("secret-token");
   });
 
   it("loads owned posts and a flattened conversation", async () => {
@@ -41,6 +76,45 @@ describe("Threads API client", () => {
     const conversation = new URL(vi.mocked(fetch).mock.calls[1][0] as string);
     expect(conversation.pathname).toBe("/post_1/conversation");
     expect(conversation.searchParams.get("reverse")).toBe("true");
+  });
+
+  it("rejects a paginated response whose data is not an array", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ data: "not-an-array" }), { status: 200 }
+    )));
+
+    const error = await getOwnedThreads("secret-token").catch((value) => value);
+
+    expect(error).toBeInstanceOf(ThreadsApiError);
+    expect(error.status).toBe(502);
+    expect(error.message).not.toContain("secret-token");
+  });
+
+  it("rejects a paginated response with a malformed item", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ data: [{ text: "missing id" }] }), { status: 200 }
+    )));
+
+    const error = await getOwnedThreads("secret-token").catch((value) => value);
+
+    expect(error).toBeInstanceOf(ThreadsApiError);
+    expect(error.status).toBe(502);
+  });
+
+  it.each([
+    { next: 42 },
+    { next: "not a valid URL" },
+    "not-an-object",
+  ])("rejects malformed paging metadata", async (paging) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ data: [{ id: "post_1" }], paging }), { status: 200 }
+    )));
+
+    const error = await getOwnedThreads("secret-token", 2).catch((value) => value);
+
+    expect(error).toBeInstanceOf(ThreadsApiError);
+    expect(error.status).toBe(502);
+    expect(vi.mocked(fetch)).toHaveBeenCalledOnce();
   });
 
   it("creates a text reply container", async () => {
@@ -128,6 +202,22 @@ describe("Threads API client", () => {
     expect(error.status).toBe(502);
     expect(error.retryable).toBe(true);
     expect(error.message).toBe("Threads API returned an invalid response");
+    expect(error.message).not.toContain("secret-token");
+  });
+
+  it("rejects a status response for a different container", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        id: "different_container",
+        status: "FINISHED",
+      }), { status: 200 })
+    ));
+
+    const error = await getThreadsContainerStatus("secret-token", "container_1")
+      .catch((value) => value);
+
+    expect(error).toBeInstanceOf(ThreadsApiError);
+    expect(error.status).toBe(502);
     expect(error.message).not.toContain("secret-token");
   });
 

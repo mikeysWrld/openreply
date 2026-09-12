@@ -62,6 +62,27 @@ describe("Threads OAuth", () => {
     expect(timeout).toHaveBeenCalledWith(2345);
   });
 
+  it.each([
+    {},
+    { access_token: "", user_id: "42" },
+    { access_token: "short", user_id: null },
+    { access_token: "short", user_id: {} },
+  ])("rejects a malformed short-token payload", async (payload) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(payload), { status: 200 })
+    ));
+
+    const error = await exchangeThreadsCode(
+      "secret-code",
+      "https://example.com/api/threads/callback"
+    ).catch((value) => value);
+
+    expect(error).toBeInstanceOf(ThreadsApiError);
+    expect(error.status).toBe(502);
+    expect(error.retryable).toBe(true);
+    expect(error.message).not.toContain("secret-code");
+  });
+
   it("exchanges a short-lived token for a long-lived token", async () => {
     vi.stubGlobal(
       "fetch",
@@ -82,6 +103,25 @@ describe("Threads OAuth", () => {
     expect(vi.mocked(fetch).mock.calls[0][1]).toEqual(expect.objectContaining({
       signal: expect.any(AbortSignal),
     }));
+  });
+
+  it.each([
+    {},
+    { access_token: "", expires_in: 5184000 },
+    { access_token: "long", expires_in: "5184000" },
+    { access_token: "long", expires_in: null },
+  ])("rejects a malformed long-token payload", async (payload) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(payload), { status: 200 })
+    ));
+
+    const error = await exchangeLongLivedThreadsToken("secret-short-token")
+      .catch((value) => value);
+
+    expect(error).toBeInstanceOf(ThreadsApiError);
+    expect(error.status).toBe(502);
+    expect(error.retryable).toBe(true);
+    expect(error.message).not.toContain("secret-short-token");
   });
 
   it("classifies OAuth network failures as retryable without leaking tokens", async () => {

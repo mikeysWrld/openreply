@@ -12,6 +12,28 @@ export class ThreadsApiError extends Error {
   }
 }
 
+export function invalidThreadsResponse(): ThreadsApiError {
+  return new ThreadsApiError(
+    "Threads API returned an invalid response",
+    502,
+    null,
+    true
+  );
+}
+
+export function isThreadsRecord(
+  value: unknown
+): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function requireThreadsString(value: unknown): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw invalidThreadsResponse();
+  }
+  return value;
+}
+
 function redactValue(message: string, value: string): string {
   if (!value) return message;
   const variants = new Set([
@@ -50,24 +72,27 @@ export async function readThreadsJson<T>(
     data = undefined;
   }
 
-  const payload = data as {
-    error?: { message?: string; code?: number };
-    error_message?: string;
-  } | undefined;
+  const payload = isThreadsRecord(data) ? data : undefined;
+  const nestedError = isThreadsRecord(payload?.error)
+    ? payload.error
+    : undefined;
   if (!response.ok) {
     const message = redactThreadsSecrets(
-      payload?.error?.message ?? payload?.error_message ?? fallbackMessage,
+      (typeof nestedError?.message === "string" ? nestedError.message : undefined) ??
+        (typeof payload?.error_message === "string"
+          ? payload.error_message
+          : fallbackMessage),
       secrets
     );
     throw new ThreadsApiError(
       message,
       response.status,
-      payload?.error?.code ?? null,
+      typeof nestedError?.code === "number" ? nestedError.code : null,
       retryableStatus(response.status)
     );
   }
-  if (data === undefined) {
-    throw new ThreadsApiError(fallbackMessage, response.status, null, true);
+  if (!isThreadsRecord(data)) {
+    throw invalidThreadsResponse();
   }
   return data as T;
 }

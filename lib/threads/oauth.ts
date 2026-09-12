@@ -3,7 +3,12 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { requireEnv } from "@/lib/env";
-import { readThreadsJson, threadsFetch } from "@/lib/threads/fetch";
+import {
+  invalidThreadsResponse,
+  readThreadsJson,
+  requireThreadsString,
+  threadsFetch,
+} from "@/lib/threads/fetch";
 
 const AUTHORIZE_URL = "https://threads.net/oauth/authorize";
 const GRAPH_URL = "https://graph.threads.net";
@@ -91,11 +96,17 @@ export async function exchangeThreadsCode(
     redirect_uri: redirectUri,
   }).toString();
   const response = await threadsFetch(url, { method: "POST" });
-  const data = await readThreadsJson<{
-    access_token: string;
-    user_id: string | number;
-  }>(response, "Threads OAuth request failed", [code, appSecret]);
-  return { accessToken: data.access_token, userId: String(data.user_id) };
+  const data = await readThreadsJson<Record<string, unknown>>(
+    response,
+    "Threads OAuth request failed",
+    [code, appSecret]
+  );
+  const accessToken = requireThreadsString(data.access_token);
+  const validUserId =
+    (typeof data.user_id === "string" && data.user_id.trim().length > 0) ||
+    (typeof data.user_id === "number" && Number.isFinite(data.user_id));
+  if (!validUserId) throw invalidThreadsResponse();
+  return { accessToken, userId: String(data.user_id) };
 }
 
 export async function exchangeLongLivedThreadsToken(
@@ -109,9 +120,18 @@ export async function exchangeLongLivedThreadsToken(
     access_token: shortLivedToken,
   }).toString();
   const response = await threadsFetch(url);
-  const data = await readThreadsJson<{
-    access_token: string;
-    expires_in: number;
-  }>(response, "Threads OAuth request failed", [shortLivedToken, appSecret]);
-  return { accessToken: data.access_token, expiresIn: data.expires_in };
+  const data = await readThreadsJson<Record<string, unknown>>(
+    response,
+    "Threads OAuth request failed",
+    [shortLivedToken, appSecret]
+  );
+  const accessToken = requireThreadsString(data.access_token);
+  if (
+    typeof data.expires_in !== "number" ||
+    !Number.isFinite(data.expires_in) ||
+    data.expires_in <= 0
+  ) {
+    throw invalidThreadsResponse();
+  }
+  return { accessToken, expiresIn: data.expires_in };
 }

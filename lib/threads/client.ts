@@ -1,7 +1,9 @@
 import {
-  ThreadsApiError,
+  invalidThreadsResponse,
+  isThreadsRecord,
   readThreadsJson,
   redactThreadsSecrets,
+  requireThreadsString,
   threadsFetch,
 } from "@/lib/threads/fetch";
 
@@ -30,20 +32,8 @@ const THREADS_CONTAINER_STATUSES = new Set<ThreadsContainerStatusValue>([
   "EXPIRED",
 ]);
 
-function invalidThreadsResponse(): ThreadsApiError {
-  return new ThreadsApiError(
-    "Threads API returned an invalid response",
-    502,
-    null,
-    true
-  );
-}
-
 function requiredResponseId(value: unknown): string {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw invalidThreadsResponse();
-  }
-  return value;
+  return requireThreadsString(value);
 }
 
 export interface ThreadsProfile {
@@ -86,11 +76,16 @@ export async function getThreadsProfile(
       fields: "id,username,threads_profile_picture_url,threads_biography",
     })
   );
-  return readThreadsJson<ThreadsProfile>(
+  const profile = await readThreadsJson<Record<string, unknown>>(
     response,
     "Threads API request failed",
     [accessToken]
   );
+  return {
+    ...profile,
+    id: requireThreadsString(profile.id),
+    username: requireThreadsString(profile.username),
+  } as ThreadsProfile;
 }
 
 async function getPaged<T>(
@@ -102,12 +97,37 @@ async function getPaged<T>(
   let next: string | null = initialUrl.toString();
   while (next && results.length < max) {
     const response: Response = await threadsFetch(next);
-    const page: {
-      data: T[];
-      paging?: { next?: string };
-    } = await readThreadsJson(response, "Threads API request failed", [accessToken]);
-    results.push(...page.data.slice(0, max - results.length));
-    next = page.paging?.next ?? null;
+    const page = await readThreadsJson<Record<string, unknown>>(
+      response,
+      "Threads API request failed",
+      [accessToken]
+    );
+    if (!Array.isArray(page.data)) throw invalidThreadsResponse();
+    const items = page.data.map((item) => {
+      if (!isThreadsRecord(item)) throw invalidThreadsResponse();
+      requireThreadsString(item.id);
+      return item as T;
+    });
+    results.push(...items.slice(0, max - results.length));
+
+    if (page.paging === undefined) {
+      next = null;
+    } else {
+      if (!isThreadsRecord(page.paging)) throw invalidThreadsResponse();
+      if (page.paging.next === undefined) {
+        next = null;
+      } else {
+        const nextUrl = requireThreadsString(page.paging.next);
+        let parsedNext: URL;
+        try {
+          parsedNext = new URL(nextUrl);
+        } catch {
+          throw invalidThreadsResponse();
+        }
+        if (parsedNext.origin !== GRAPH_URL) throw invalidThreadsResponse();
+        next = parsedNext.toString();
+      }
+    }
   }
   return results;
 }
@@ -186,6 +206,7 @@ export async function getThreadsContainerStatus(
     [accessToken]
   );
   const id = requiredResponseId(data.id);
+  if (id !== containerId) throw invalidThreadsResponse();
   if (
     typeof data.status !== "string" ||
     !THREADS_CONTAINER_STATUSES.has(data.status as ThreadsContainerStatusValue)
