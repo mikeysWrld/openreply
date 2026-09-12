@@ -246,6 +246,31 @@ describe("Threads campaign API", () => {
     expect(mocks.create).not.toHaveBeenCalled();
   });
 
+  it("keeps a Meta OAuth code 190 create failure as a safe 502", async () => {
+    mocks.context.mockResolvedValue({ workspaceId: "workspace_1", role: "OWNER" });
+    mocks.account.mockResolvedValue({
+      id: "account_1",
+      accessToken: "encrypted-token",
+      threadsUserId: "threads_user_1",
+    });
+    mocks.getThreadsPostDetails.mockRejectedValue(
+      new mocks.ThreadsApiError("expired secret token", 400, 190, false)
+    );
+
+    const response = await POST(new NextRequest("https://example.com/api/threads/campaigns", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(validBody),
+    }));
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      success: false,
+      error: "Failed to verify Threads post ownership",
+    });
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
   it("returns a safe 502 when decrypting the account token fails", async () => {
     mocks.context.mockResolvedValue({ workspaceId: "workspace_1", role: "OWNER" });
     mocks.account.mockResolvedValue({
@@ -469,6 +494,43 @@ describe("Threads campaign API", () => {
     expect(response.status).toBe(400);
     expect(mocks.updateMany).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { metaStatus: 400, code: 100, expectedStatus: 400, expectedError: "Threads post not found for this account" },
+    { metaStatus: 404, code: 190, expectedStatus: 400, expectedError: "Threads post not found for this account" },
+    { metaStatus: 400, code: 190, expectedStatus: 502, expectedError: "Failed to verify Threads post ownership" },
+  ])(
+    "classifies Meta $metaStatus/code $code during target-free activation",
+    async ({ metaStatus, code, expectedStatus, expectedError }) => {
+      mocks.context.mockResolvedValue({ workspaceId: "workspace_1", role: "OWNER" });
+      mocks.campaign.mockResolvedValue({
+        id: "campaign_1",
+        matchAnyPost: false,
+        postId: "post_1",
+        postUrl: null,
+        threadsAccount: {
+          accessToken: "campaign-encrypted-token",
+          threadsUserId: "threads_user_1",
+        },
+      });
+      mocks.getThreadsPostDetails.mockRejectedValue(
+        new mocks.ThreadsApiError("secret Meta failure", metaStatus, code, false)
+      );
+
+      const response = await PATCH(new NextRequest("https://example.com/api/threads/campaigns?id=campaign_1", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ isActive: true }),
+      }));
+
+      expect(response.status).toBe(expectedStatus);
+      await expect(response.json()).resolves.toEqual({
+        success: false,
+        error: expectedError,
+      });
+      expect(mocks.updateMany).not.toHaveBeenCalled();
+    }
+  );
 
   it("returns 409 without a stale write when the target changes during activation", async () => {
     mocks.context.mockResolvedValue({ workspaceId: "workspace_1", role: "OWNER" });

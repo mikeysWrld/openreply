@@ -112,7 +112,7 @@ function postVerificationFailedResponse() {
 function isNotOwnedMetaError(error: unknown): boolean {
   return error instanceof ThreadsApiError &&
     !error.retryable &&
-    (error.status === 400 || error.status === 404);
+    (error.status === 404 || (error.status === 400 && error.code === 100));
 }
 
 export async function GET(request: NextRequest) {
