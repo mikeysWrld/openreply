@@ -59,6 +59,9 @@ export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const submitInFlightRef = useRef(false);
+  const currentPostMissing = Boolean(
+    campaignId && postId && !posts.some((post) => post.id === postId),
+  );
 
   useEffect(() => {
     let ignore = false;
@@ -257,6 +260,7 @@ export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
           <label className="block text-sm font-semibold">Threads post
             <select className="mt-2 w-full rounded border border-border bg-surface px-4 py-3" value={postId} onChange={(e) => { const selectedPost = posts.find((post) => post.id === e.target.value); setPostId(e.target.value); setPostUrl(selectedPost?.permalink ?? ""); }} required disabled={postsLoading}>
               <option value="">{postsLoading ? "Loading posts…" : "Choose a post"}</option>
+              {currentPostMissing && <option value={postId}>Current post — {postId}</option>}
               {posts.map((post) => <option key={post.id} value={post.id}>{post.text?.slice(0, 90) || post.id}</option>)}
             </select>
           </label>

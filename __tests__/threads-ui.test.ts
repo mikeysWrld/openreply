@@ -36,6 +36,8 @@ describe("campaign channel navigation", () => {
     expect(form).toContain("postUrl: matchAnyPost ? null : postUrl");
     expect(form).toContain("if (saving) return;");
     expect(form).toContain("!matchAnyPost && (!postId || !postUrl)");
+    expect(form).toContain("Current post");
+    expect(form).toContain("!posts.some((post) => post.id === postId)");
   });
 
   it("preserves a specific campaign post URL before owned posts load", () => {
