@@ -56,6 +56,25 @@ describe("Threads API client", () => {
     expect(create.searchParams.get("reply_to_id")).toBe("reply_1");
   });
 
+  it("rejects a create response without a container id", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({}), { status: 200 })
+    ));
+
+    const error = await createThreadsReplyContainer(
+      "secret-token",
+      "42",
+      "reply_1",
+      "reply"
+    ).catch((value) => value);
+
+    expect(error).toBeInstanceOf(ThreadsApiError);
+    expect(error.status).toBe(502);
+    expect(error.retryable).toBe(true);
+    expect(error.message).toBe("Threads API returned an invalid response");
+    expect(error.message).not.toContain("secret-token");
+  });
+
   it("loads a reply container status", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
       new Response(JSON.stringify({
@@ -91,6 +110,27 @@ describe("Threads API client", () => {
     expect(result.error_message).not.toContain(encodeURIComponent(token));
   });
 
+  it.each([
+    { payload: {}, description: "missing status" },
+    {
+      payload: { id: "container_1", status: "UNKNOWN" },
+      description: "unknown status",
+    },
+  ])("rejects a container response with $description", async ({ payload }) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(payload), { status: 200 })
+    ));
+
+    const error = await getThreadsContainerStatus("secret-token", "container_1")
+      .catch((value) => value);
+
+    expect(error).toBeInstanceOf(ThreadsApiError);
+    expect(error.status).toBe(502);
+    expect(error.retryable).toBe(true);
+    expect(error.message).toBe("Threads API returned an invalid response");
+    expect(error.message).not.toContain("secret-token");
+  });
+
   it("publishes an existing reply container", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ id: "published_1" }), { status: 200 })
@@ -102,6 +142,24 @@ describe("Threads API client", () => {
     const publish = new URL(vi.mocked(fetch).mock.calls[0][0] as string);
     expect(publish.pathname).toBe("/42/threads_publish");
     expect(publish.searchParams.get("creation_id")).toBe("container_1");
+  });
+
+  it("rejects a publish response without a media id", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({}), { status: 200 })
+    ));
+
+    const error = await publishThreadsReplyContainer(
+      "secret-token",
+      "42",
+      "container_1"
+    ).catch((value) => value);
+
+    expect(error).toBeInstanceOf(ThreadsApiError);
+    expect(error.status).toBe(502);
+    expect(error.retryable).toBe(true);
+    expect(error.message).toBe("Threads API returned an invalid response");
+    expect(error.message).not.toContain("secret-token");
   });
 
   it("uses the configured request timeout duration", async () => {

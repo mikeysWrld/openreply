@@ -103,7 +103,7 @@ export async function processThreadsReplyJob(
     }
 
     let publishedReplyId = claimedLog.publishedReplyId;
-    if (container.status !== "PUBLISHED") {
+    if (container.status === "FINISHED") {
       const renewed = await prisma.threadsReplyLog.updateMany({
         where: { id: claimedLog.id, publishLeaseToken: leaseToken },
         data: {
@@ -117,6 +117,13 @@ export async function processThreadsReplyJob(
         accessToken,
         claimedLog.threadsAccount.threadsUserId,
         containerId
+      );
+    } else if (container.status !== "PUBLISHED") {
+      throw new ThreadsApiError(
+        "Threads API returned an invalid container status",
+        502,
+        null,
+        true
       );
     }
     await prisma.threadsReplyLog.updateMany({

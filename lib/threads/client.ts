@@ -1,4 +1,5 @@
 import {
+  ThreadsApiError,
   readThreadsJson,
   redactThreadsSecrets,
   threadsFetch,
@@ -19,6 +20,30 @@ export interface ThreadsContainerStatus {
   id: string;
   status: ThreadsContainerStatusValue;
   error_message?: string;
+}
+
+const THREADS_CONTAINER_STATUSES = new Set<ThreadsContainerStatusValue>([
+  "IN_PROGRESS",
+  "FINISHED",
+  "PUBLISHED",
+  "ERROR",
+  "EXPIRED",
+]);
+
+function invalidThreadsResponse(): ThreadsApiError {
+  return new ThreadsApiError(
+    "Threads API returned an invalid response",
+    502,
+    null,
+    true
+  );
+}
+
+function requiredResponseId(value: unknown): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw invalidThreadsResponse();
+  }
+  return value;
 }
 
 export interface ThreadsProfile {
@@ -134,12 +159,12 @@ export async function createThreadsReplyContainer(
     }),
     { method: "POST" }
   );
-  const container = await readThreadsJson<{ id: string }>(
+  const container = await readThreadsJson<{ id?: unknown }>(
     createResponse,
     "Threads API request failed",
     [accessToken]
   );
-  return container.id;
+  return requiredResponseId(container.id);
 }
 
 export async function getThreadsContainerStatus(
@@ -151,11 +176,29 @@ export async function getThreadsContainerStatus(
       fields: "id,status,error_message",
     })
   );
-  const container = await readThreadsJson<ThreadsContainerStatus>(
+  const data = await readThreadsJson<{
+    id?: unknown;
+    status?: unknown;
+    error_message?: unknown;
+  }>(
     response,
     "Threads API request failed",
     [accessToken]
   );
+  const id = requiredResponseId(data.id);
+  if (
+    typeof data.status !== "string" ||
+    !THREADS_CONTAINER_STATUSES.has(data.status as ThreadsContainerStatusValue)
+  ) {
+    throw invalidThreadsResponse();
+  }
+  const container: ThreadsContainerStatus = {
+    id,
+    status: data.status as ThreadsContainerStatusValue,
+    ...(typeof data.error_message === "string"
+      ? { error_message: data.error_message }
+      : {}),
+  };
   if (container.error_message) {
     container.error_message = redactThreadsSecrets(
       container.error_message,
@@ -176,10 +219,10 @@ export async function publishThreadsReplyContainer(
     }),
     { method: "POST" }
   );
-  const published = await readThreadsJson<{ id: string }>(
+  const published = await readThreadsJson<{ id?: unknown }>(
     publishResponse,
     "Threads API request failed",
     [accessToken]
   );
-  return published.id;
+  return requiredResponseId(published.id);
 }

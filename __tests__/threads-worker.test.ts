@@ -33,6 +33,7 @@ vi.mock("@/lib/threads/client", () => ({
       readonly retryable: boolean
     ) {
       super(message);
+      this.name = "ThreadsApiError";
     }
   },
 }));
@@ -204,6 +205,25 @@ describe("Threads reply worker", () => {
       });
     }
   );
+
+  it("does not publish a container with an invalid status", async () => {
+    mocks.findUnique.mockResolvedValue(log("container_1"));
+    mocks.getContainerStatus.mockResolvedValue({
+      id: "container_1",
+      status: "UNKNOWN",
+    });
+
+    await expect(processThreadsReplyJob(job)).rejects.toMatchObject({
+      name: "ThreadsApiError",
+      retryable: true,
+    });
+
+    expect(mocks.publish).not.toHaveBeenCalled();
+    expect(mocks.updateMany).toHaveBeenLastCalledWith({
+      where: expect.objectContaining({ id: "log_1" }),
+      data: expect.objectContaining({ status: "PENDING" }),
+    });
+  });
 
   it.each(["ERROR", "EXPIRED"] as const)(
     "stops retries for a %s container without creating another",
