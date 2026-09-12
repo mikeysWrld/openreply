@@ -75,6 +75,22 @@ describe("Threads API client", () => {
     expect(status.searchParams.get("fields")).toBe("id,status,error_message");
   });
 
+  it("redacts access tokens from a container error message", async () => {
+    const token = "secret/token value";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        id: "container_1",
+        status: "ERROR",
+        error_message: `invalid ${token} ${encodeURIComponent(token)}`,
+      }), { status: 200 })
+    ));
+
+    const result = await getThreadsContainerStatus(token, "container_1");
+
+    expect(result.error_message).not.toContain(token);
+    expect(result.error_message).not.toContain(encodeURIComponent(token));
+  });
+
   it("publishes an existing reply container", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ id: "published_1" }), { status: 200 })
@@ -164,4 +180,40 @@ describe("Threads API client", () => {
     expect(error.retryable).toBe(true);
     expect(error.message).not.toContain("super-secret");
   });
+
+  it("redacts raw and encoded access tokens from Meta error responses", async () => {
+    const token = "secret/token value";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({
+        error: {
+          message: `bad ${token} ${encodeURIComponent(token)} secret%2Ftoken+value`,
+          code: 190,
+        },
+      }),
+      { status: 400 }
+    )));
+
+    const error = await getThreadsProfile(token).catch((value) => value);
+
+    expect(error).toBeInstanceOf(ThreadsApiError);
+    expect(error.message).not.toContain(token);
+    expect(error.message).not.toContain(encodeURIComponent(token));
+    expect(error.message).not.toContain("secret%2Ftoken+value");
+  });
+
+  it.each([
+    [429, ""],
+    [500, "not-json"],
+  ])(
+    "turns a %i invalid response body into a retryable ThreadsApiError",
+    async (status, body) => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, { status })));
+
+      const error = await getThreadsProfile("token").catch((value) => value);
+
+      expect(error).toBeInstanceOf(ThreadsApiError);
+      expect(error.status).toBe(status);
+      expect(error.retryable).toBe(true);
+    }
+  );
 });

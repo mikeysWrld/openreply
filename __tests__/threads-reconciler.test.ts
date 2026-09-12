@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   getOwnedThreads: vi.fn(),
   getThreadsConversation: vi.fn(),
   processObservedThreadsReply: vi.fn(),
+  recoverPendingThreadsReplies: vi.fn(),
 }));
 
 vi.mock("@/lib/db/client", () => ({
@@ -25,6 +26,10 @@ vi.mock("@/lib/threads/client", () => ({
 
 vi.mock("@/lib/threads/campaign-processor", () => ({
   processObservedThreadsReply: mocks.processObservedThreadsReply,
+}));
+
+vi.mock("@/lib/polling/threads-reply-recovery", () => ({
+  recoverPendingThreadsReplies: mocks.recoverPendingThreadsReplies,
 }));
 
 import { reconcileThreadsReplies } from "../lib/polling/threads-reconciler";
@@ -55,6 +60,7 @@ beforeEach(() => {
   mocks.getOwnedThreads.mockResolvedValue([]);
   mocks.getThreadsConversation.mockResolvedValue([]);
   mocks.processObservedThreadsReply.mockResolvedValue("no_match");
+  mocks.recoverPendingThreadsReplies.mockResolvedValue(0);
   vi.spyOn(console, "error").mockImplementation(() => undefined);
 });
 

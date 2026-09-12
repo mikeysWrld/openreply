@@ -275,10 +275,14 @@ An **All posts** campaign includes the account's newest existing posts, up to `T
    THREADS_POLL_MAX_PER_SWEEP=30
    THREADS_POLL_MAX_POSTS_PER_SWEEP=100
    THREADS_REQUEST_TIMEOUT_MS=15000
+   THREADS_REPLY_RECOVERY_MAX_PER_SWEEP=50
    ```
 
    `THREADS_POLL_MAX_POSTS_PER_SWEEP` is the per-account cap on newest owned posts rediscovered during each sweep. The default of `100` is intentionally bounded; accounts that need to monitor older history beyond that cap can raise it deliberately after considering the additional API traffic.
    `THREADS_REQUEST_TIMEOUT_MS` bounds every Threads network request, including web-app OAuth exchanges and worker polling/publishing calls. It must be a positive whole number of milliseconds and defaults to `15000` when omitted or invalid; only set it when both environments need a different timeout.
+   `THREADS_REPLY_RECOVERY_MAX_PER_SWEEP` bounds how many retryable pending reply sends the worker re-enqueues per sweep after queue-level retries expire. It defaults to `50`.
+
+   Threads sweep coalescing is process-local, which matches the current single-worker deployment. Public reply publishing is separately protected by a database-backed lease, so overlapping or manual worker executions cannot both publish the same pending log.
 
    The web app and worker still need the shared database, Redis, and `ENCRYPTION_KEY` settings documented earlier. The worker reads the encrypted account token from the shared database and does not need `THREADS_APP_ID` or `THREADS_APP_SECRET`.
 

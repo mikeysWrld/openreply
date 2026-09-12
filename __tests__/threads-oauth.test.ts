@@ -97,6 +97,31 @@ describe("Threads OAuth", () => {
     expect(error.status).toBe(0);
     expect(error.message).not.toContain("short-secret-token");
   });
+
+  it("redacts OAuth code and app secret from Meta error responses", async () => {
+    const code = "oauth/code value";
+    const appSecret = "app/secret value";
+    vi.stubEnv("THREADS_APP_SECRET", appSecret);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({
+        error: {
+          message: `bad ${code} ${encodeURIComponent(code)} ${appSecret} ${encodeURIComponent(appSecret)}`,
+        },
+      }),
+      { status: 400 }
+    )));
+
+    const error = await exchangeThreadsCode(
+      code,
+      "https://example.com/api/threads/callback"
+    ).catch((value) => value);
+
+    expect(error).toBeInstanceOf(ThreadsApiError);
+    expect(error.message).not.toContain(code);
+    expect(error.message).not.toContain(encodeURIComponent(code));
+    expect(error.message).not.toContain(appSecret);
+    expect(error.message).not.toContain(encodeURIComponent(appSecret));
+  });
 });
 
 describe("Threads environment", () => {

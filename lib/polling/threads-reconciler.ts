@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db/client";
 import { decryptToken } from "@/lib/meta/oauth";
 import { processObservedThreadsReply } from "@/lib/threads/campaign-processor";
+import { recoverPendingThreadsReplies } from "@/lib/polling/threads-reply-recovery";
 import {
   getOwnedThreads,
   getThreadsConversation,
@@ -31,6 +32,11 @@ function positiveInteger(value: string | undefined, fallback: number): number {
 }
 
 async function runThreadsReconciliation(): Promise<ThreadsReconciliationResult> {
+  try {
+    await recoverPendingThreadsReplies();
+  } catch (error) {
+    console.error(`[Threads Poller] reply recovery: ${errorMessage(error)}`);
+  }
   const campaigns = await prisma.threadsCampaign.findMany({
     where: { isActive: true },
     select: {

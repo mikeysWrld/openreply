@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   findUnique: vi.fn(),
   update: vi.fn(),
+  updateMany: vi.fn(),
   createContainer: vi.fn(),
   getContainerStatus: vi.fn(),
   publish: vi.fn(),
@@ -12,7 +13,11 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/db/client", () => ({
   prisma: {
-    threadsReplyLog: { findUnique: mocks.findUnique, update: mocks.update },
+    threadsReplyLog: {
+      findUnique: mocks.findUnique,
+      update: mocks.update,
+      updateMany: mocks.updateMany,
+    },
   },
 }));
 vi.mock("@/lib/meta/oauth", () => ({ decryptToken: mocks.decrypt }));
@@ -43,7 +48,11 @@ const job = {
   replyMessage: "感謝你的關注！立即加入 Beta 測試名單：https://golfr.ai/",
 };
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.resetAllMocks();
+  mocks.decrypt.mockReturnValue("plain-token");
+  mocks.updateMany.mockResolvedValue({ count: 1 });
+});
 
 describe("Threads reply worker", () => {
   function log(publishContainerId: string | null = null) {
@@ -53,6 +62,8 @@ describe("Threads reply worker", () => {
       attempts: 0,
       publishContainerId,
       publishedReplyId: null,
+      publishLeaseToken: null,
+      publishLeaseExpiresAt: null,
       threadsAccount: {
         threadsUserId: "42",
         accessToken: "encrypted",
@@ -72,8 +83,8 @@ describe("Threads reply worker", () => {
       "reply_1",
       job.replyMessage
     );
-    expect(mocks.update).toHaveBeenNthCalledWith(1, {
-      where: { id: "log_1" },
+    expect(mocks.updateMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({ id: "log_1" }),
       data: { publishContainerId: "container_1" },
     });
     expect(mocks.getContainerStatus).toHaveBeenCalledWith("plain-token", "container_1");
@@ -82,8 +93,8 @@ describe("Threads reply worker", () => {
       "42",
       "container_1"
     );
-    expect(mocks.update).toHaveBeenNthCalledWith(2, {
-      where: { id: "log_1" },
+    expect(mocks.updateMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({ id: "log_1" }),
       data: expect.objectContaining({
         status: "SENT",
         publishedReplyId: "published_1",
@@ -103,8 +114,8 @@ describe("Threads reply worker", () => {
 
     expect(mocks.createContainer).not.toHaveBeenCalled();
     expect(mocks.publish).not.toHaveBeenCalled();
-    expect(mocks.update).toHaveBeenCalledWith({
-      where: { id: "log_1" },
+    expect(mocks.updateMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({ id: "log_1" }),
       data: expect.objectContaining({
         status: "SENT",
         publishedReplyId: null,
@@ -114,9 +125,7 @@ describe("Threads reply worker", () => {
   });
 
   it("reuses the persisted container after a later failure", async () => {
-    mocks.findUnique
-      .mockResolvedValueOnce(log())
-      .mockResolvedValueOnce(log("container_1"));
+    mocks.findUnique.mockResolvedValue(log());
     mocks.createContainer.mockResolvedValue("container_1");
     mocks.getContainerStatus
       .mockResolvedValueOnce({ id: "container_1", status: "IN_PROGRESS" })
@@ -124,6 +133,7 @@ describe("Threads reply worker", () => {
     mocks.publish.mockResolvedValue("published_1");
 
     await expect(processThreadsReplyJob(job)).rejects.toThrow(/in progress/i);
+    mocks.findUnique.mockResolvedValue(log("container_1"));
     await processThreadsReplyJob(job);
 
     expect(mocks.createContainer).toHaveBeenCalledOnce();
@@ -132,9 +142,7 @@ describe("Threads reply worker", () => {
   });
 
   it("status-checks the same container when the publish response is lost", async () => {
-    mocks.findUnique
-      .mockResolvedValueOnce(log())
-      .mockResolvedValueOnce(log("container_1"));
+    mocks.findUnique.mockResolvedValue(log());
     mocks.createContainer.mockResolvedValue("container_1");
     mocks.getContainerStatus
       .mockResolvedValueOnce({ id: "container_1", status: "FINISHED" })
@@ -142,13 +150,14 @@ describe("Threads reply worker", () => {
     mocks.publish.mockRejectedValueOnce(new Error("connection closed"));
 
     await expect(processThreadsReplyJob(job)).rejects.toThrow("connection closed");
+    mocks.findUnique.mockResolvedValue(log("container_1"));
     await processThreadsReplyJob(job);
 
     expect(mocks.createContainer).toHaveBeenCalledOnce();
     expect(mocks.getContainerStatus).toHaveBeenCalledTimes(2);
     expect(mocks.publish).toHaveBeenCalledOnce();
-    expect(mocks.update).toHaveBeenLastCalledWith({
-      where: { id: "log_1" },
+    expect(mocks.updateMany).toHaveBeenLastCalledWith({
+      where: expect.objectContaining({ id: "log_1" }),
       data: expect.objectContaining({
         status: "SENT",
         publishedReplyId: null,
@@ -164,7 +173,37 @@ describe("Threads reply worker", () => {
 
     expect(mocks.createContainer).not.toHaveBeenCalled();
     expect(mocks.publish).not.toHaveBeenCalled();
+    expect(mocks.updateMany).toHaveBeenLastCalledWith({
+      where: expect.objectContaining({ id: "log_1" }),
+      data: expect.objectContaining({
+        status: "PENDING",
+        attempts: { increment: 1 },
+        publishLeaseToken: null,
+        publishLeaseExpiresAt: null,
+      }),
+    });
   });
+
+  it.each([0, 429, 503])(
+    "keeps retryable API status %i pending",
+    async (status) => {
+      mocks.findUnique.mockResolvedValue(log("container_1"));
+      mocks.getContainerStatus.mockRejectedValue(
+        new ThreadsApiError("temporary Meta failure", status, null, true)
+      );
+
+      await expect(processThreadsReplyJob(job)).rejects.toBeInstanceOf(ThreadsApiError);
+
+      expect(mocks.updateMany).toHaveBeenLastCalledWith({
+        where: expect.objectContaining({ id: "log_1" }),
+        data: expect.objectContaining({
+          status: "PENDING",
+          errorMessage: "temporary Meta failure",
+          attempts: { increment: 1 },
+        }),
+      });
+    }
+  );
 
   it.each(["ERROR", "EXPIRED"] as const)(
     "stops retries for a %s container without creating another",
@@ -180,6 +219,10 @@ describe("Threads reply worker", () => {
 
       expect(mocks.createContainer).not.toHaveBeenCalled();
       expect(mocks.publish).not.toHaveBeenCalled();
+      expect(mocks.updateMany).toHaveBeenLastCalledWith({
+        where: expect.objectContaining({ id: "log_1" }),
+        data: expect.objectContaining({ status: "FAILED" }),
+      });
     }
   );
 
@@ -191,8 +234,8 @@ describe("Threads reply worker", () => {
 
     await expect(processThreadsReplyJob(job)).rejects.toBeInstanceOf(UnrecoverableError);
 
-    expect(mocks.update).toHaveBeenCalledWith({
-      where: { id: "log_1" },
+    expect(mocks.updateMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({ id: "log_1" }),
       data: expect.objectContaining({
         status: "FAILED",
         errorMessage: "permission denied",
@@ -205,5 +248,67 @@ describe("Threads reply worker", () => {
     mocks.findUnique.mockResolvedValue({ id: "log_1", status: "SENT" });
     await processThreadsReplyJob(job);
     expect(mocks.publish).not.toHaveBeenCalled();
+  });
+
+  it("does not retry a terminal failed log", async () => {
+    mocks.findUnique.mockResolvedValue({ ...log("container_1"), status: "FAILED" });
+
+    await processThreadsReplyJob(job);
+
+    expect(mocks.updateMany).not.toHaveBeenCalled();
+    expect(mocks.getContainerStatus).not.toHaveBeenCalled();
+    expect(mocks.publish).not.toHaveBeenCalled();
+  });
+
+  it("allows only one of two contenders to create and publish", async () => {
+    mocks.findUnique.mockResolvedValue(log());
+    mocks.updateMany
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValue({ count: 1 });
+    mocks.createContainer.mockResolvedValue("container_1");
+    mocks.getContainerStatus.mockResolvedValue({ id: "container_1", status: "FINISHED" });
+    mocks.publish.mockResolvedValue("published_1");
+
+    await Promise.all([processThreadsReplyJob(job), processThreadsReplyJob(job)]);
+
+    expect(mocks.createContainer).toHaveBeenCalledOnce();
+    expect(mocks.publish).toHaveBeenCalledOnce();
+  });
+
+  it("does not create or publish when another worker owns the lease", async () => {
+    mocks.findUnique.mockResolvedValue(log());
+    mocks.updateMany.mockResolvedValueOnce({ count: 0 });
+
+    await processThreadsReplyJob(job);
+
+    expect(mocks.createContainer).not.toHaveBeenCalled();
+    expect(mocks.publish).not.toHaveBeenCalled();
+    expect(mocks.findUnique).toHaveBeenCalledOnce();
+  });
+
+  it("reclaims an expired publish lease", async () => {
+    mocks.findUnique.mockResolvedValue({
+      ...log(),
+      publishLeaseToken: "stale-owner",
+      publishLeaseExpiresAt: new Date("2020-01-01T00:00:00.000Z"),
+    });
+    mocks.createContainer.mockResolvedValue("container_1");
+    mocks.getContainerStatus.mockResolvedValue({ id: "container_1", status: "FINISHED" });
+    mocks.publish.mockResolvedValue("published_1");
+
+    await processThreadsReplyJob(job);
+
+    expect(mocks.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        id: "log_1",
+        OR: expect.arrayContaining([
+          { publishLeaseToken: null },
+          { publishLeaseExpiresAt: { lt: expect.any(Date) } },
+        ]),
+      }),
+    }));
+    expect(mocks.createContainer).toHaveBeenCalledOnce();
+    expect(mocks.publish).toHaveBeenCalledOnce();
   });
 });

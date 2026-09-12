@@ -1,4 +1,8 @@
-import { ThreadsApiError, threadsFetch } from "@/lib/threads/fetch";
+import {
+  readThreadsJson,
+  redactThreadsSecrets,
+  threadsFetch,
+} from "@/lib/threads/fetch";
 
 const GRAPH_URL = "https://graph.threads.net";
 
@@ -42,21 +46,6 @@ export interface ThreadsReply extends ThreadsPost {
   replied_to?: { id: string };
 }
 
-async function readResponse<T>(response: Response): Promise<T> {
-  const data = (await response.json()) as T & {
-    error?: { message?: string; code?: number };
-  };
-  if (!response.ok) {
-    throw new ThreadsApiError(
-      data.error?.message ?? "Threads API request failed",
-      response.status,
-      data.error?.code ?? null,
-      response.status === 429 || response.status >= 500
-    );
-  }
-  return data;
-}
-
 function graphUrl(path: string, token: string, params?: Record<string, string>) {
   const url = new URL(path, GRAPH_URL);
   const search = new URLSearchParams({ access_token: token, ...params });
@@ -72,10 +61,18 @@ export async function getThreadsProfile(
       fields: "id,username,threads_profile_picture_url,threads_biography",
     })
   );
-  return readResponse<ThreadsProfile>(response);
+  return readThreadsJson<ThreadsProfile>(
+    response,
+    "Threads API request failed",
+    [accessToken]
+  );
 }
 
-async function getPaged<T>(initialUrl: URL, max: number): Promise<T[]> {
+async function getPaged<T>(
+  initialUrl: URL,
+  max: number,
+  accessToken: string
+): Promise<T[]> {
   const results: T[] = [];
   let next: string | null = initialUrl.toString();
   while (next && results.length < max) {
@@ -83,7 +80,7 @@ async function getPaged<T>(initialUrl: URL, max: number): Promise<T[]> {
     const page: {
       data: T[];
       paging?: { next?: string };
-    } = await readResponse(response);
+    } = await readThreadsJson(response, "Threads API request failed", [accessToken]);
     results.push(...page.data.slice(0, max - results.length));
     next = page.paging?.next ?? null;
   }
@@ -99,7 +96,8 @@ export function getOwnedThreads(
       fields: "id,text,timestamp,permalink,media_type,shortcode",
       limit: String(Math.min(limit, 100)),
     }),
-    limit
+    limit,
+    accessToken
   );
 }
 
@@ -117,7 +115,8 @@ export function getThreadsConversation(
       reverse: "true",
       limit: "100",
     }),
-    limit
+    limit,
+    accessToken
   );
 }
 
@@ -135,7 +134,11 @@ export async function createThreadsReplyContainer(
     }),
     { method: "POST" }
   );
-  const container = await readResponse<{ id: string }>(createResponse);
+  const container = await readThreadsJson<{ id: string }>(
+    createResponse,
+    "Threads API request failed",
+    [accessToken]
+  );
   return container.id;
 }
 
@@ -148,7 +151,18 @@ export async function getThreadsContainerStatus(
       fields: "id,status,error_message",
     })
   );
-  return readResponse<ThreadsContainerStatus>(response);
+  const container = await readThreadsJson<ThreadsContainerStatus>(
+    response,
+    "Threads API request failed",
+    [accessToken]
+  );
+  if (container.error_message) {
+    container.error_message = redactThreadsSecrets(
+      container.error_message,
+      [accessToken]
+    );
+  }
+  return container;
 }
 
 export async function publishThreadsReplyContainer(
@@ -162,6 +176,10 @@ export async function publishThreadsReplyContainer(
     }),
     { method: "POST" }
   );
-  const published = await readResponse<{ id: string }>(publishResponse);
+  const published = await readThreadsJson<{ id: string }>(
+    publishResponse,
+    "Threads API request failed",
+    [accessToken]
+  );
   return published.id;
 }

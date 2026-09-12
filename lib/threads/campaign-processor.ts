@@ -65,6 +65,7 @@ export async function processObservedThreadsReply(input: {
         replyAuthorId: normalized.authorId,
         replyAuthorName: normalized.authorName,
         replyText: normalized.text,
+        replyMessage: campaign.replyMessage,
         matchedKeyword: match.matchedKeyword,
       },
     });

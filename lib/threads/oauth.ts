@@ -3,7 +3,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { requireEnv } from "@/lib/env";
-import { threadsFetch } from "@/lib/threads/fetch";
+import { readThreadsJson, threadsFetch } from "@/lib/threads/fetch";
 
 const AUTHORIZE_URL = "https://threads.net/oauth/authorize";
 const GRAPH_URL = "https://graph.threads.net";
@@ -77,52 +77,41 @@ export function getThreadsAuthorizationUrl(
   return url.toString();
 }
 
-async function readTokenResponse<T>(response: Response): Promise<T> {
-  const data = (await response.json()) as T & {
-    error?: { message?: string };
-    error_message?: string;
-  };
-  if (!response.ok) {
-    throw new Error(
-      data.error?.message ?? data.error_message ?? "Threads OAuth request failed"
-    );
-  }
-  return data;
-}
-
 export async function exchangeThreadsCode(
   code: string,
   redirectUri: string
 ): Promise<{ accessToken: string; userId: string }> {
+  const appSecret = requireEnv("THREADS_APP_SECRET");
   const url = new URL(`${GRAPH_URL}/oauth/access_token`);
   url.search = new URLSearchParams({
     client_id: requireEnv("THREADS_APP_ID"),
-    client_secret: requireEnv("THREADS_APP_SECRET"),
+    client_secret: appSecret,
     code,
     grant_type: "authorization_code",
     redirect_uri: redirectUri,
   }).toString();
   const response = await threadsFetch(url, { method: "POST" });
-  const data = await readTokenResponse<{
+  const data = await readThreadsJson<{
     access_token: string;
     user_id: string | number;
-  }>(response);
+  }>(response, "Threads OAuth request failed", [code, appSecret]);
   return { accessToken: data.access_token, userId: String(data.user_id) };
 }
 
 export async function exchangeLongLivedThreadsToken(
   shortLivedToken: string
 ): Promise<{ accessToken: string; expiresIn: number }> {
+  const appSecret = requireEnv("THREADS_APP_SECRET");
   const url = new URL(`${GRAPH_URL}/access_token`);
   url.search = new URLSearchParams({
     grant_type: "th_exchange_token",
-    client_secret: requireEnv("THREADS_APP_SECRET"),
+    client_secret: appSecret,
     access_token: shortLivedToken,
   }).toString();
   const response = await threadsFetch(url);
-  const data = await readTokenResponse<{
+  const data = await readThreadsJson<{
     access_token: string;
     expires_in: number;
-  }>(response);
+  }>(response, "Threads OAuth request failed", [shortLivedToken, appSecret]);
   return { accessToken: data.access_token, expiresIn: data.expires_in };
 }

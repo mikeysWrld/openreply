@@ -83,6 +83,7 @@ describe("Threads campaign reply selection", () => {
         replyAuthorId: "visitor_1",
         replyAuthorName: "visitor",
         replyText: "Please send the LINK",
+        replyMessage: "Here is the link",
         matchedKeyword: "LINK",
       },
     });

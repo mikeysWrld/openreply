@@ -6,6 +6,10 @@ const allPostsMigration = readFileSync(
   "prisma/migrations/20260913090000_add_threads_all_posts/migration.sql",
   "utf8",
 );
+const publishLeaseMigration = readFileSync(
+  "prisma/migrations/20260915090000_add_threads_publish_lease/migration.sql",
+  "utf8",
+);
 
 describe("Threads persistence schema", () => {
   it("keeps Threads accounts, campaigns, logs, and deduplication isolated", () => {
@@ -41,6 +45,17 @@ describe("Threads persistence schema", () => {
     );
     expect(allPostsMigration).toContain(
       'ALTER COLUMN "postUrl" DROP NOT NULL',
+    );
+  });
+
+  it("adds nullable database-backed publish leases forward-only", () => {
+    expect(schema).toContain("publishLeaseToken String?");
+    expect(schema).toContain("publishLeaseExpiresAt DateTime?");
+    expect(schema).toContain("replyMessage      String?");
+    expect(publishLeaseMigration).toContain('ADD COLUMN "replyMessage" TEXT');
+    expect(publishLeaseMigration).toContain('ADD COLUMN "publishLeaseToken" TEXT');
+    expect(publishLeaseMigration).toContain(
+      'ADD COLUMN "publishLeaseExpiresAt" TIMESTAMP(3)',
     );
   });
 });

@@ -1,4 +1,5 @@
 import { UnrecoverableError, Worker } from "bullmq";
+import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db/client";
 import { decryptToken } from "@/lib/meta/oauth";
 import { getRedisConnection, type ProcessThreadsReplyJob } from "@/lib/queue/client";
@@ -8,6 +9,16 @@ import {
   getThreadsContainerStatus,
   publishThreadsReplyContainer,
 } from "@/lib/threads/client";
+import { getThreadsRequestTimeoutMs } from "@/lib/threads/fetch";
+
+const MIN_PUBLISH_LEASE_MS = 2 * 60_000;
+
+function publishLeaseDurationMs(): number {
+  return Math.max(
+    MIN_PUBLISH_LEASE_MS,
+    getThreadsRequestTimeoutMs() * 3 + 30_000
+  );
+}
 
 export async function processThreadsReplyJob(
   data: ProcessThreadsReplyJob
@@ -20,20 +31,54 @@ export async function processThreadsReplyJob(
       },
     },
   });
-  if (!log || log.status === "SENT") return;
+  if (!log || log.status !== "PENDING") return;
+
+  const leaseToken = randomUUID();
+  const now = new Date();
+  const claimed = await prisma.threadsReplyLog.updateMany({
+    where: {
+      id: log.id,
+      status: "PENDING",
+      OR: [
+        { publishLeaseToken: null },
+        { publishLeaseExpiresAt: null },
+        { publishLeaseExpiresAt: { lt: now } },
+      ],
+    },
+    data: {
+      publishLeaseToken: leaseToken,
+      publishLeaseExpiresAt: new Date(now.getTime() + publishLeaseDurationMs()),
+    },
+  });
+  if (claimed.count === 0) return;
+
+  const claimedLog = await prisma.threadsReplyLog.findUnique({
+    where: { id: log.id },
+    include: {
+      threadsAccount: {
+        select: { threadsUserId: true, accessToken: true },
+      },
+    },
+  });
+  if (!claimedLog) return;
 
   try {
-    const accessToken = decryptToken(log.threadsAccount.accessToken);
-    let containerId = log.publishContainerId;
+    let accessToken: string;
+    try {
+      accessToken = decryptToken(claimedLog.threadsAccount.accessToken);
+    } catch {
+      throw new UnrecoverableError("Unable to decrypt Threads access token");
+    }
+    let containerId = claimedLog.publishContainerId;
     if (!containerId) {
       containerId = await createThreadsReplyContainer(
         accessToken,
-        log.threadsAccount.threadsUserId,
+        claimedLog.threadsAccount.threadsUserId,
         data.replyId,
         data.replyMessage
       );
-      await prisma.threadsReplyLog.update({
-        where: { id: log.id },
+      await prisma.threadsReplyLog.updateMany({
+        where: { id: claimedLog.id, publishLeaseToken: leaseToken },
         data: { publishContainerId: containerId },
       });
     }
@@ -58,30 +103,37 @@ export async function processThreadsReplyJob(
 
     const publishedReplyId =
       container.status === "PUBLISHED"
-        ? log.publishedReplyId
+        ? claimedLog.publishedReplyId
         : await publishThreadsReplyContainer(
             accessToken,
-            log.threadsAccount.threadsUserId,
+            claimedLog.threadsAccount.threadsUserId,
             containerId
           );
-    await prisma.threadsReplyLog.update({
-      where: { id: log.id },
+    await prisma.threadsReplyLog.updateMany({
+      where: { id: claimedLog.id, publishLeaseToken: leaseToken },
       data: {
         status: "SENT",
         publishedReplyId,
         replySentAt: new Date(),
         errorMessage: null,
         attempts: { increment: 1 },
+        publishLeaseToken: null,
+        publishLeaseExpiresAt: null,
       },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
-    await prisma.threadsReplyLog.update({
-      where: { id: log.id },
+    const terminal =
+      error instanceof UnrecoverableError ||
+      (error instanceof ThreadsApiError && !error.retryable);
+    await prisma.threadsReplyLog.updateMany({
+      where: { id: claimedLog.id, publishLeaseToken: leaseToken },
       data: {
-        status: "FAILED",
+        status: terminal ? "FAILED" : "PENDING",
         errorMessage: message.slice(0, 500),
         attempts: { increment: 1 },
+        publishLeaseToken: null,
+        publishLeaseExpiresAt: null,
       },
     });
     if (error instanceof ThreadsApiError && !error.retryable) {

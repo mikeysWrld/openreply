@@ -199,10 +199,13 @@ model ThreadsReplyLog {
   replyAuthorId     String?
   replyAuthorName   String?
   replyText         String
+  replyMessage      String?
   matchedKeyword    String?
   status            ThreadsReplyStatus @default(PENDING)
   attempts          Int                @default(0)
   publishContainerId String?
+  publishLeaseToken String?
+  publishLeaseExpiresAt DateTime?
   publishedReplyId  String?
   replySentAt       DateTime?
   errorMessage      String?
