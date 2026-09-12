@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db/client";
+import { decryptToken } from "@/lib/meta/oauth";
+import { getOwnedThreads } from "@/lib/threads/client";
 import { canManageWorkspace, getCurrentWorkspaceContext } from "@/lib/workspace-access";
 
 export const dynamic = "force-dynamic";
@@ -38,6 +40,7 @@ const createSchema = z.object({
 );
 
 const editableUpdateFields = {
+  threadsAccountId: z.never().optional(),
   name: campaignFields.name.optional(),
   keywords: campaignFields.keywords.optional(),
   wholeWordMatch: z.boolean().optional(),
@@ -67,6 +70,35 @@ const updateSchema = z.intersection(
   z.object(editableUpdateFields),
   z.union([unchangedTargetSchema, allPostsTargetSchema, specificPostTargetSchema])
 );
+
+async function getCanonicalOwnedPostUrl(
+  encryptedAccessToken: string,
+  postId: string
+): Promise<string | null> {
+  const posts = await getOwnedThreads(decryptToken(encryptedAccessToken), 100);
+  const post = posts.find((candidate) => candidate.id === postId);
+  if (!post) return null;
+
+  const permalink = z.string().url().safeParse(post.permalink);
+  if (!permalink.success) {
+    throw new Error("Threads returned a post without a valid permalink");
+  }
+  return permalink.data;
+}
+
+function postNotOwnedResponse() {
+  return NextResponse.json(
+    { success: false, error: "Threads post not found for this account" },
+    { status: 400 }
+  );
+}
+
+function postVerificationFailedResponse() {
+  return NextResponse.json(
+    { success: false, error: "Failed to verify Threads post ownership" },
+    { status: 502 }
+  );
+}
 
 export async function GET(request: NextRequest) {
   const context = await getCurrentWorkspaceContext();
@@ -118,13 +150,23 @@ export async function POST(request: NextRequest) {
   }
   const account = await prisma.threadsAccount.findFirst({
     where: { id: parsed.data.threadsAccountId, workspaceId: context.workspaceId },
-    select: { id: true },
+    select: { id: true, accessToken: true },
   });
   if (!account) {
     return NextResponse.json({ success: false, error: "Threads account not found" }, { status: 400 });
   }
+  let postUrl = parsed.data.postUrl;
+  if (!parsed.data.matchAnyPost) {
+    try {
+      postUrl = await getCanonicalOwnedPostUrl(account.accessToken, parsed.data.postId!);
+    } catch {
+      console.error("[Threads Campaigns] Failed to verify post ownership");
+      return postVerificationFailedResponse();
+    }
+    if (!postUrl) return postNotOwnedResponse();
+  }
   const campaign = await prisma.threadsCampaign.create({
-    data: { workspaceId: context.workspaceId, ...parsed.data },
+    data: { workspaceId: context.workspaceId, ...parsed.data, postUrl },
   });
   return NextResponse.json({ success: true, data: campaign }, { status: 201 });
 }
@@ -136,9 +178,32 @@ export async function PATCH(request: NextRequest) {
   const id = request.nextUrl.searchParams.get("id");
   const parsed = updateSchema.safeParse(await request.json().catch(() => null));
   if (!id || !parsed.success) return NextResponse.json({ success: false, error: "Invalid request" }, { status: 400 });
+  let updateData = parsed.data;
+  if (parsed.data.matchAnyPost === false) {
+    const campaign = await prisma.threadsCampaign.findFirst({
+      where: { id, workspaceId: context.workspaceId },
+      select: { id: true, threadsAccount: { select: { accessToken: true } } },
+    });
+    if (!campaign) {
+      return NextResponse.json({ success: false, error: "Not found" }, { status: 404 });
+    }
+
+    let postUrl: string | null;
+    try {
+      postUrl = await getCanonicalOwnedPostUrl(
+        campaign.threadsAccount.accessToken,
+        parsed.data.postId
+      );
+    } catch {
+      console.error("[Threads Campaigns] Failed to verify post ownership");
+      return postVerificationFailedResponse();
+    }
+    if (!postUrl) return postNotOwnedResponse();
+    updateData = { ...parsed.data, postUrl };
+  }
   const updated = await prisma.threadsCampaign.updateMany({
     where: { id, workspaceId: context.workspaceId },
-    data: parsed.data,
+    data: updateData,
   });
   if (!updated.count) return NextResponse.json({ success: false, error: "Not found" }, { status: 404 });
   return NextResponse.json({ success: true });
