@@ -16,6 +16,23 @@ const DEFAULT_REPLY = "感謝你的關注！立即加入 Beta 測試名單：htt
 
 type Account = { id: string; username: string };
 type Post = { id: string; text?: string; permalink?: string };
+type CampaignDetails = {
+  id: string;
+  name: string;
+  threadsAccountId: string;
+  matchAnyPost: boolean;
+  postId: string | null;
+  postUrl: string | null;
+  keywords: string[];
+  replyMessage: string;
+  wholeWordMatch: boolean;
+  isActive: boolean;
+};
+type ApiPayload = { success?: boolean; data?: unknown; error?: string };
+
+function errorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
 
 export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
   const router = useRouter();
@@ -23,6 +40,11 @@ export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
   const [posts, setPosts] = useState<Post[]>([]);
   const [postsLoading, setPostsLoading] = useState(false);
   const [postsError, setPostsError] = useState("");
+  const [accountsLoading, setAccountsLoading] = useState(true);
+  const [accountsError, setAccountsError] = useState("");
+  const [campaignLoading, setCampaignLoading] = useState(Boolean(campaignId));
+  const [campaignLoadError, setCampaignLoadError] = useState("");
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [name, setName] = useState("Threads 公開回覆");
   const [accountId, setAccountId] = useState("");
   const [matchAnyPost, setMatchAnyPost] = useState(true);
@@ -36,19 +58,53 @@ export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    fetch("/api/threads/accounts")
-      .then((response) => response.json())
-      .then((payload) => {
-        const next = payload.data?.threadsAccounts ?? [];
-        setAccounts(next);
-        if (!campaignId && next[0]) setAccountId(next[0].id);
-      });
-    if (campaignId) {
-      fetch("/api/threads/campaigns")
-        .then((response) => response.json())
-        .then((payload) => {
-          const campaign = payload.data?.find((item: { id: string }) => item.id === campaignId);
-          if (!campaign) return;
+    let ignore = false;
+
+    async function loadAccounts() {
+      setAccountsLoading(true);
+      setAccountsError("");
+      try {
+        const response = await fetch("/api/threads/accounts");
+        const payload = await response.json() as ApiPayload;
+        if (!response.ok || !payload.success) {
+          throw new Error(payload.error || "Could not load Threads accounts");
+        }
+        const next = (payload.data as { threadsAccounts?: unknown } | undefined)?.threadsAccounts;
+        if (!Array.isArray(next)) {
+          throw new Error("Could not load Threads accounts");
+        }
+        if (!ignore) {
+          setAccounts(next as Account[]);
+          if (!campaignId && next[0]) setAccountId((next[0] as Account).id);
+        }
+      } catch (loadError: unknown) {
+        if (!ignore) {
+          setAccounts([]);
+          setAccountsError(errorMessage(loadError, "Could not load Threads accounts"));
+        }
+      } finally {
+        if (!ignore) setAccountsLoading(false);
+      }
+    }
+
+    async function loadCampaign() {
+      if (!campaignId) return;
+      setCampaignLoading(true);
+      setCampaignLoadError("");
+      try {
+        const response = await fetch("/api/threads/campaigns", { cache: "no-store" });
+        const payload = await response.json() as ApiPayload;
+        if (!response.ok || !payload.success) {
+          throw new Error(payload.error || "Could not load Threads campaign");
+        }
+        if (!Array.isArray(payload.data)) {
+          throw new Error("Could not load Threads campaign");
+        }
+        const campaign = payload.data.find((item) => (item as { id?: string }).id === campaignId) as CampaignDetails | undefined;
+        if (!campaign) {
+          throw new Error("Threads campaign not found");
+        }
+        if (!ignore) {
           setName(campaign.name);
           setAccountId(campaign.threadsAccountId);
           setMatchAnyPost(campaign.matchAnyPost);
@@ -60,9 +116,20 @@ export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
           setReplyMessage(campaign.replyMessage);
           setWholeWordMatch(campaign.wholeWordMatch);
           setIsActive(campaign.isActive);
-        });
+        }
+      } catch (loadError: unknown) {
+        if (!ignore) {
+          setCampaignLoadError(errorMessage(loadError, "Could not load Threads campaign"));
+        }
+      } finally {
+        if (!ignore) setCampaignLoading(false);
+      }
     }
-  }, [campaignId]);
+
+    void loadAccounts();
+    void loadCampaign();
+    return () => { ignore = true; };
+  }, [campaignId, loadAttempt]);
 
   useEffect(() => {
     let ignore = false;
@@ -99,32 +166,47 @@ export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
     if (!accountId || (!matchAnyPost && (!postId || !postUrl))) return;
     setSaving(true);
     setError("");
-    const response = await fetch(
-      `/api/threads/campaigns${campaignId ? `?id=${encodeURIComponent(campaignId)}` : ""}`,
-      {
-        method: campaignId ? "PATCH" : "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          name,
-          ...(campaignId ? {} : { threadsAccountId: accountId }),
-          matchAnyPost,
-          postId: matchAnyPost ? null : postId,
-          postUrl: matchAnyPost ? null : postUrl,
-          keywords: keywords.split(",").map((value) => value.trim()).filter(Boolean),
-          wholeWordMatch,
-          replyMessage,
-          isActive,
-        }),
+    try {
+      const response = await fetch(
+        `/api/threads/campaigns${campaignId ? `?id=${encodeURIComponent(campaignId)}` : ""}`,
+        {
+          method: campaignId ? "PATCH" : "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            name,
+            ...(campaignId ? {} : { threadsAccountId: accountId }),
+            matchAnyPost,
+            postId: matchAnyPost ? null : postId,
+            postUrl: matchAnyPost ? null : postUrl,
+            keywords: keywords.split(",").map((value) => value.trim()).filter(Boolean),
+            wholeWordMatch,
+            replyMessage,
+            isActive,
+          }),
+        }
+      );
+      const payload = await response.json() as ApiPayload;
+      if (!response.ok || !payload.success) {
+        throw new Error(payload.error || "Could not save Threads campaign");
       }
-    );
-    const payload = await response.json();
-    if (!payload.success) {
-      setError(payload.error ?? "Could not save Threads campaign");
+      router.push("/campaigns/threads");
+      router.refresh();
+    } catch (saveError: unknown) {
+      setError(errorMessage(saveError, "Could not save Threads campaign"));
+    } finally {
       setSaving(false);
-      return;
     }
-    router.push("/campaigns/threads");
-    router.refresh();
+  }
+
+  if (campaignLoading) {
+    return <div className="panel h-40 rounded" aria-label="Loading Threads campaign" />;
+  }
+
+  if (campaignLoadError) {
+    return <div role="alert" className="panel rounded p-6 text-sm text-error">
+      <p>{campaignLoadError}</p>
+      <button type="button" onClick={() => setLoadAttempt((attempt) => attempt + 1)} className="mt-4 rounded border border-border px-4 py-2 text-foreground">Retry</button>
+    </div>;
   }
 
   return (
@@ -133,7 +215,7 @@ export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
         <input className="mt-2 w-full rounded border border-border bg-surface px-4 py-3" value={name} onChange={(e) => setName(e.target.value)} required />
       </label>
       <label className="block text-sm font-semibold">Threads account
-        <select className="mt-2 w-full rounded border border-border bg-surface px-4 py-3" value={accountId} onChange={(e) => { const nextAccountId = e.target.value; setAccountId(nextAccountId); setPostId(""); setPostUrl(""); setPosts([]); setPostsLoading(Boolean(nextAccountId) && !matchAnyPost); setPostsError(""); setError(""); }} required disabled={Boolean(campaignId)}>
+        <select className="mt-2 w-full rounded border border-border bg-surface px-4 py-3" value={accountId} onChange={(e) => { const nextAccountId = e.target.value; setAccountId(nextAccountId); setPostId(""); setPostUrl(""); setPosts([]); setPostsLoading(Boolean(nextAccountId) && !matchAnyPost); setPostsError(""); setError(""); }} required disabled={Boolean(campaignId) || accountsLoading || Boolean(accountsError)}>
           <option value="">Choose account</option>
           {accounts.map((account) => <option key={account.id} value={account.id}>@{account.username}</option>)}
         </select>
@@ -172,9 +254,10 @@ export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
         <label className="flex items-center gap-3 rounded border border-border p-4 text-sm"><input type="checkbox" checked={wholeWordMatch} onChange={(e) => setWholeWordMatch(e.target.checked)} /> Match whole words</label>
         <label className="flex items-center gap-3 rounded border border-border p-4 text-sm"><input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} /> Activate immediately</label>
       </div>
-      {accounts.length === 0 && <p className="text-sm text-warning">Connect a Threads account in Settings first.</p>}
+      {accountsError && <div role="alert" className="text-sm text-error"><p>{accountsError}</p><button type="button" onClick={() => setLoadAttempt((attempt) => attempt + 1)} className="mt-2 rounded border border-border px-3 py-1.5 text-foreground">Retry</button></div>}
+      {!accountsLoading && !accountsError && accounts.length === 0 && <p className="text-sm text-warning">Connect a Threads account in Settings first.</p>}
       {error && <p role="alert" className="text-sm text-error">{error}</p>}
-      <button disabled={saving || !accountId || (!matchAnyPost && (!postId || !postUrl))} className="rounded bg-accent px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{saving ? "Saving…" : "Save Threads campaign"}</button>
+      <button disabled={saving || accountsLoading || Boolean(accountsError) || !accountId || (!matchAnyPost && (!postId || !postUrl))} className="rounded bg-accent px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{saving ? "Saving…" : "Save Threads campaign"}</button>
     </form>
   );
 }

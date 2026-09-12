@@ -75,8 +75,53 @@ describe("campaign channel navigation", () => {
 
   it("lets managers delete a Threads campaign", () => {
     const list = readFileSync("app/(dashboard)/campaigns/threads/page.tsx", "utf8");
-    expect(list).toContain('method: "DELETE"');
+    expect(list).toContain('mutate(campaign, "DELETE")');
     expect(list).toContain("Delete");
+  });
+
+  it("surfaces campaign-list load failures separately from the empty state and offers retry", () => {
+    const list = readFileSync("app/(dashboard)/campaigns/threads/page.tsx", "utf8");
+    expect(list).toContain("const [loadError, setLoadError]");
+    expect(list).toContain("if (!response.ok || !payload.success)");
+    expect(list).toContain("catch (loadFailure");
+    expect(list).toContain('role="alert"');
+    expect(list).toContain("Retry");
+    expect(list).toContain("function retryLoad()");
+    expect(list).toContain("setLoading(true)");
+    expect(list).toContain('setLoadError("")');
+    expect(list.indexOf("loadError ?")).toBeLessThan(list.indexOf("campaigns.length === 0"));
+  });
+
+  it("keeps mutation failures visible and prevents repeated campaign actions", () => {
+    const list = readFileSync("app/(dashboard)/campaigns/threads/page.tsx", "utf8");
+    expect(list).toContain("const [actionError, setActionError]");
+    expect(list).toContain("const [actionCampaignId, setActionCampaignId]");
+    expect(list).toContain("if (!response.ok || !payload.success)");
+    expect(list).toContain("catch (actionFailure");
+    expect(list).toContain("finally");
+    expect(list).toContain("disabled={actionCampaignId === campaign.id}");
+  });
+
+  it("distinguishes account and campaign-load failures from valid form states", () => {
+    const form = readFileSync("components/threads-campaign-form.tsx", "utf8");
+    expect(form).toContain("const [accountsError, setAccountsError]");
+    expect(form).toContain("const [campaignLoadError, setCampaignLoadError]");
+    expect(form).toContain("if (!response.ok || !payload.success)");
+    expect(form).toContain("catch (loadError");
+    expect(form).toContain("if (!ignore)");
+    expect(form).toContain("if (campaignLoadError)");
+    expect(form).toContain("!accountsLoading && !accountsError && accounts.length === 0");
+    expect(form).toContain('role="alert"');
+  });
+
+  it("always releases the saving state and reports response, JSON, and API failures", () => {
+    const form = readFileSync("components/threads-campaign-form.tsx", "utf8");
+    const submit = form.slice(form.indexOf("async function submit"));
+    expect(submit).toContain("try {");
+    expect(submit).toContain("if (!response.ok || !payload.success)");
+    expect(submit).toContain("catch (saveError");
+    expect(submit).toContain("finally");
+    expect(submit).toContain("setSaving(false)");
   });
 
   it("labels all-post campaigns without linking to a post", () => {
