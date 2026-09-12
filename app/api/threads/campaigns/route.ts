@@ -45,32 +45,27 @@ const editableUpdateFields = {
   isActive: z.boolean().optional(),
 };
 
-const updateSchema = z.object({
-  ...editableUpdateFields,
-  matchAnyPost: targetFields.matchAnyPost.optional(),
-  postId: targetFields.postId.optional(),
-  postUrl: targetFields.postUrl.optional(),
-}).superRefine((data, context) => {
-  const hasPostId = data.postId !== undefined;
-  const hasPostUrl = data.postUrl !== undefined;
+const unchangedTargetSchema = z.object({
+  matchAnyPost: z.never().optional(),
+  postId: z.never().optional(),
+  postUrl: z.never().optional(),
+});
 
-  if (data.matchAnyPost === undefined && (hasPostId || hasPostUrl)) {
-    context.addIssue({
-      code: "custom",
-      message: "Target fields must be updated atomically",
-      path: ["matchAnyPost"],
-    });
-  }
-  if (data.matchAnyPost === false && (!data.postId || !data.postUrl)) {
-    context.addIssue({
-      code: "custom",
-      message: "A post ID and URL are required when switching to a specific post",
-      path: [!data.postId ? "postId" : "postUrl"],
-    });
-  }
-}).transform((data) => data.matchAnyPost === true
-  ? { ...data, postId: null, postUrl: null }
-  : data
+const allPostsTargetSchema = z.object({
+  matchAnyPost: z.literal(true),
+  postId: z.null().optional(),
+  postUrl: z.null().optional(),
+}).transform((data) => ({ ...data, postId: null, postUrl: null }));
+
+const specificPostTargetSchema = z.object({
+  matchAnyPost: z.literal(false),
+  postId: z.string().trim().min(1),
+  postUrl: z.string().url(),
+});
+
+const updateSchema = z.intersection(
+  z.object(editableUpdateFields),
+  z.union([unchangedTargetSchema, allPostsTargetSchema, specificPostTargetSchema])
 );
 
 export async function GET(request: NextRequest) {

@@ -118,8 +118,8 @@ describe("Threads campaign API", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         matchAnyPost: true,
-        postId: "stale_post",
-        postUrl: "https://www.threads.net/@golfrai/post/stale",
+        postId: null,
+        postUrl: null,
       }),
     }));
 
@@ -128,6 +128,23 @@ describe("Threads campaign API", () => {
       where: { id: "campaign_1", workspaceId: "workspace_1" },
       data: { matchAnyPost: true, postId: null, postUrl: null },
     });
+  });
+
+  it("rejects non-null post fields when switching to all posts", async () => {
+    mocks.context.mockResolvedValue({ workspaceId: "workspace_1", role: "OWNER" });
+
+    const response = await PATCH(new NextRequest("https://example.com/api/threads/campaigns?id=campaign_1", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        matchAnyPost: true,
+        postId: "stale_post",
+        postUrl: "https://www.threads.net/@golfrai/post/stale",
+      }),
+    }));
+
+    expect(response.status).toBe(400);
+    expect(mocks.updateMany).not.toHaveBeenCalled();
   });
 
   it("rejects an incomplete switch to a specific post", async () => {
