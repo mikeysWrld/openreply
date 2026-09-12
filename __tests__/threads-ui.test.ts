@@ -33,8 +33,17 @@ describe("campaign channel navigation", () => {
     const form = readFileSync("components/threads-campaign-form.tsx", "utf8");
     expect(form).toContain("matchAnyPost,");
     expect(form).toContain("postId: matchAnyPost ? null : postId");
-    expect(form).toContain("postUrl: matchAnyPost ? null : post?.permalink ?? null");
-    expect(form).toContain("saving || !accountId || (!matchAnyPost && !postId)");
+    expect(form).toContain("postUrl: matchAnyPost ? null : postUrl");
+    expect(form).toContain("if (saving) return;");
+    expect(form).toContain("!matchAnyPost && (!postId || !postUrl)");
+  });
+
+  it("preserves a specific campaign post URL before owned posts load", () => {
+    const form = readFileSync("components/threads-campaign-form.tsx", "utf8");
+    expect(form).toContain('const [postUrl, setPostUrl] = useState("")');
+    expect(form).toContain('setPostUrl(campaign.postUrl ?? "")');
+    expect(form).toContain("setPostUrl(selectedPost?.permalink ?? \"\")");
+    expect(form).toContain('setPostId(""); setPostUrl("")');
   });
 
   it("only fetches and renders owned posts for specific-post targeting", () => {

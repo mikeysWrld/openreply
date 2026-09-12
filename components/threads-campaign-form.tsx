@@ -25,6 +25,7 @@ export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
   const [accountId, setAccountId] = useState("");
   const [matchAnyPost, setMatchAnyPost] = useState(true);
   const [postId, setPostId] = useState("");
+  const [postUrl, setPostUrl] = useState("");
   const [keywords, setKeywords] = useState(DEFAULT_KEYWORDS.join(", "));
   const [replyMessage, setReplyMessage] = useState(DEFAULT_REPLY);
   const [wholeWordMatch, setWholeWordMatch] = useState(true);
@@ -50,6 +51,7 @@ export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
           setAccountId(campaign.threadsAccountId);
           setMatchAnyPost(campaign.matchAnyPost);
           setPostId(campaign.postId ?? "");
+          setPostUrl(campaign.postUrl ?? "");
           setKeywords(campaign.keywords.join(", "));
           setReplyMessage(campaign.replyMessage);
           setWholeWordMatch(campaign.wholeWordMatch);
@@ -74,9 +76,10 @@ export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (saving) return;
+    if (!accountId || (!matchAnyPost && (!postId || !postUrl))) return;
     setSaving(true);
     setError("");
-    const post = posts.find((item) => item.id === postId);
     const response = await fetch(
       `/api/threads/campaigns${campaignId ? `?id=${encodeURIComponent(campaignId)}` : ""}`,
       {
@@ -87,7 +90,7 @@ export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
           ...(campaignId ? {} : { threadsAccountId: accountId }),
           matchAnyPost,
           postId: matchAnyPost ? null : postId,
-          postUrl: matchAnyPost ? null : post?.permalink ?? null,
+          postUrl: matchAnyPost ? null : postUrl,
           keywords: keywords.split(",").map((value) => value.trim()).filter(Boolean),
           wholeWordMatch,
           replyMessage,
@@ -111,7 +114,7 @@ export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
         <input className="mt-2 w-full rounded border border-border bg-surface px-4 py-3" value={name} onChange={(e) => setName(e.target.value)} required />
       </label>
       <label className="block text-sm font-semibold">Threads account
-        <select className="mt-2 w-full rounded border border-border bg-surface px-4 py-3" value={accountId} onChange={(e) => { setAccountId(e.target.value); setPostId(""); setPosts([]); setError(""); }} required disabled={Boolean(campaignId)}>
+        <select className="mt-2 w-full rounded border border-border bg-surface px-4 py-3" value={accountId} onChange={(e) => { setAccountId(e.target.value); setPostId(""); setPostUrl(""); setPosts([]); setError(""); }} required disabled={Boolean(campaignId)}>
           <option value="">Choose account</option>
           {accounts.map((account) => <option key={account.id} value={account.id}>@{account.username}</option>)}
         </select>
@@ -120,7 +123,7 @@ export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
         <legend className="text-sm font-semibold">Post targeting</legend>
         <div className="mt-2 grid gap-3 sm:grid-cols-2">
           <label className="flex items-center gap-3 rounded border border-border p-4 text-sm">
-            <input type="radio" name="postTarget" value="all" checked={matchAnyPost} onChange={() => { setMatchAnyPost(true); setPosts([]); setError(""); }} />
+            <input type="radio" name="postTarget" value="all" checked={matchAnyPost} onChange={() => { setMatchAnyPost(true); setPostId(""); setPostUrl(""); setPosts([]); setError(""); }} />
             All posts
           </label>
           <label className="flex items-center gap-3 rounded border border-border p-4 text-sm">
@@ -131,7 +134,7 @@ export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
       </fieldset>
       {!matchAnyPost && (
         <label className="block text-sm font-semibold">Threads post
-          <select className="mt-2 w-full rounded border border-border bg-surface px-4 py-3" value={postId} onChange={(e) => setPostId(e.target.value)} required>
+          <select className="mt-2 w-full rounded border border-border bg-surface px-4 py-3" value={postId} onChange={(e) => { const selectedPost = posts.find((post) => post.id === e.target.value); setPostId(e.target.value); setPostUrl(selectedPost?.permalink ?? ""); }} required>
             <option value="">Choose a post</option>
             {posts.map((post) => <option key={post.id} value={post.id}>{post.text?.slice(0, 90) || post.id}</option>)}
           </select>
@@ -150,7 +153,7 @@ export function ThreadsCampaignForm({ campaignId }: { campaignId?: string }) {
       </div>
       {accounts.length === 0 && <p className="text-sm text-warning">Connect a Threads account in Settings first.</p>}
       {error && <p className="text-sm text-error">{error}</p>}
-      <button disabled={saving || !accountId || (!matchAnyPost && !postId)} className="rounded bg-accent px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{saving ? "Saving…" : "Save Threads campaign"}</button>
+      <button disabled={saving || !accountId || (!matchAnyPost && (!postId || !postUrl))} className="rounded bg-accent px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{saving ? "Saving…" : "Save Threads campaign"}</button>
     </form>
   );
 }
