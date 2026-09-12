@@ -36,6 +36,7 @@ describe("Threads API client", () => {
     ]);
     const conversation = new URL(vi.mocked(fetch).mock.calls[1][0] as string);
     expect(conversation.pathname).toBe("/post_1/conversation");
+    expect(conversation.searchParams.get("reverse")).toBe("true");
   });
 
   it("creates and publishes one text reply", async () => {

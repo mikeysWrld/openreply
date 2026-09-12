@@ -242,6 +242,48 @@ Hit `/api/health` any time. It reports the database, Redis, queue, and worker he
 
 If you want to inspect where a comment stopped, the Postgres tables tell you: `WebhookEvent` for delivery, `DmLog` for send status and errors, `OperationalEvent` for worker crashes and the polling reconciler's sweep logs.
 
+## Threads public-reply campaigns
+
+Threads is a separate campaign channel. It monitors top-level and nested replies in conversations rooted at a selected post owned by your connected Threads profile. A keyword match publishes a public reply; Threads campaigns never send private messages and do not alter Instagram campaigns.
+
+### Meta Threads API setup
+
+1. In the same Meta app, open **Use cases**, choose **Add use cases**, select **Access the Threads API**, and save.
+2. In the Threads use case, register this exact redirect URI for production:
+
+   `https://openreply-umber-six.vercel.app/api/threads/callback`
+
+3. Enable the minimum permissions used by OpenReply:
+   - `threads_basic`
+   - `threads_read_replies`
+   - `threads_content_publish`
+4. Copy the Threads App ID and Threads App Secret into both the web and worker environments:
+
+   ```env
+   THREADS_APP_ID=...
+   THREADS_APP_SECRET=...
+   THREADS_POLL_INTERVAL_MS=300000
+   THREADS_POLL_MAX_PER_SWEEP=30
+   ```
+
+5. Add the profile as a tester if Meta requires it while the app is in development mode, and accept the authorization from the Threads profile.
+6. Redeploy both Vercel and the always-on worker after adding the variables.
+7. In OpenReply, open **Settings**, click **Connect Threads**, approve the three permissions, and return to Settings.
+
+Threads reply detection uses a conservative worker poll of each active campaign's flattened conversation. `ProcessedThreadsReply` records every observed reply, including non-matches, and `ThreadsReplyLog` records matched sends and failures. Self-authored replies are ignored and unique constraints prevent duplicate responses.
+
+### First Threads campaign
+
+Open **Campaigns → Threads Campaigns → New Threads Campaign**, select the owned post, and keep the campaign paused for its first test. The prepared campaign uses these keywords:
+
+`golfr`, `golf`, `interested`, `cool`, `website`, `golfer`, `free`
+
+The prepared Traditional Chinese public reply is:
+
+`感謝你的關注！立即加入 Beta 測試名單：https://golfr.ai/`
+
+From a second Threads account, post one matching direct reply and one matching nested reply. Confirm each receives exactly one public response and appears as sent in the Threads campaign counts. A non-matching reply and the connected account's own reply must produce no response. Activate the campaign only after this test succeeds.
+
 ## Local development
 
 You need Postgres and Redis. The included `docker-compose.yml` starts both:

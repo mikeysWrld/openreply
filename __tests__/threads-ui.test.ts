@@ -17,4 +17,10 @@ describe("campaign channel navigation", () => {
     }
     expect(form).toContain("感謝你的關注！立即加入 Beta 測試名單：https://golfr.ai/");
   });
+
+  it("lets managers delete a Threads campaign", () => {
+    const list = readFileSync("app/(dashboard)/campaigns/threads/page.tsx", "utf8");
+    expect(list).toContain('method: "DELETE"');
+    expect(list).toContain("Delete");
+  });
 });

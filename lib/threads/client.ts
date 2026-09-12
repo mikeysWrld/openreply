@@ -107,7 +107,9 @@ export function getThreadsConversation(
     graphUrl(`/${rootPostId}/conversation`, accessToken, {
       fields:
         "id,text,timestamp,permalink,username,owner,is_reply,is_reply_owned_by_me,root_post,replied_to",
-      reverse: "false",
+      // The poller only requests a bounded page, so ask Meta for newest-first
+      // results. Otherwise active conversations eventually pin us to old replies.
+      reverse: "true",
       limit: "100",
     }),
     limit
