@@ -311,4 +311,38 @@ describe("Threads reply worker", () => {
     expect(mocks.createContainer).toHaveBeenCalledOnce();
     expect(mocks.publish).toHaveBeenCalledOnce();
   });
+
+  it("stops after creation if it loses the lease before persisting the container", async () => {
+    mocks.findUnique.mockResolvedValue(log());
+    mocks.updateMany
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 0 });
+    mocks.createContainer.mockResolvedValue("container_1");
+
+    await processThreadsReplyJob(job);
+
+    expect(mocks.createContainer).toHaveBeenCalledOnce();
+    expect(mocks.getContainerStatus).not.toHaveBeenCalled();
+    expect(mocks.publish).not.toHaveBeenCalled();
+  });
+
+  it("renews and verifies lease ownership before publishing", async () => {
+    mocks.findUnique.mockResolvedValue(log("container_1"));
+    mocks.updateMany
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 0 });
+    mocks.getContainerStatus.mockResolvedValue({ id: "container_1", status: "FINISHED" });
+
+    await processThreadsReplyJob(job);
+
+    expect(mocks.getContainerStatus).toHaveBeenCalledOnce();
+    expect(mocks.publish).not.toHaveBeenCalled();
+    expect(mocks.updateMany).toHaveBeenLastCalledWith({
+      where: expect.objectContaining({
+        id: "log_1",
+        publishLeaseToken: expect.any(String),
+      }),
+      data: { publishLeaseExpiresAt: expect.any(Date) },
+    });
+  });
 });

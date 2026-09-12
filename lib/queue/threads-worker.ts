@@ -77,10 +77,11 @@ export async function processThreadsReplyJob(
         data.replyId,
         data.replyMessage
       );
-      await prisma.threadsReplyLog.updateMany({
+      const persisted = await prisma.threadsReplyLog.updateMany({
         where: { id: claimedLog.id, publishLeaseToken: leaseToken },
         data: { publishContainerId: containerId },
       });
+      if (persisted.count === 0) return;
     }
 
     const container = await getThreadsContainerStatus(accessToken, containerId);
@@ -101,14 +102,23 @@ export async function processThreadsReplyJob(
       );
     }
 
-    const publishedReplyId =
-      container.status === "PUBLISHED"
-        ? claimedLog.publishedReplyId
-        : await publishThreadsReplyContainer(
-            accessToken,
-            claimedLog.threadsAccount.threadsUserId,
-            containerId
-          );
+    let publishedReplyId = claimedLog.publishedReplyId;
+    if (container.status !== "PUBLISHED") {
+      const renewed = await prisma.threadsReplyLog.updateMany({
+        where: { id: claimedLog.id, publishLeaseToken: leaseToken },
+        data: {
+          publishLeaseExpiresAt: new Date(
+            Date.now() + publishLeaseDurationMs()
+          ),
+        },
+      });
+      if (renewed.count === 0) return;
+      publishedReplyId = await publishThreadsReplyContainer(
+        accessToken,
+        claimedLog.threadsAccount.threadsUserId,
+        containerId
+      );
+    }
     await prisma.threadsReplyLog.updateMany({
       where: { id: claimedLog.id, publishLeaseToken: leaseToken },
       data: {
