@@ -215,7 +215,8 @@ describe("Threads polling reconciliation", () => {
 
   it("continues with specific posts and other accounts when listing fails", async () => {
     mocks.campaignFindMany.mockResolvedValue([
-      campaign("account-1", { postId: "specific", matchAnyPost: true }),
+      campaign("account-1", { matchAnyPost: true }),
+      campaign("account-1", { postId: "specific" }),
       campaign("account-2", { postId: "other" }),
     ]);
     mocks.getOwnedThreads.mockRejectedValueOnce(new Error("listing failed"));
@@ -302,4 +303,36 @@ describe("Threads polling reconciliation", () => {
       mocks.processObservedThreadsReply.mock.calls.map((call) => call[0].reply.id)
     ).toEqual(["newer", "newest"]);
   });
+
+  it.each([
+    ["not-a-number", 30, 100],
+    ["NaN", 30, 100],
+    ["Infinity", 30, 100],
+    ["0", 30, 100],
+    ["-4", 30, 100],
+    ["0.5", 1, 1],
+    ["2.9", 2, 2],
+  ])(
+    "normalizes a %s polling cap to reply=%i and posts=%i",
+    async (value, expectedReplyCap, expectedPostCap) => {
+      process.env.THREADS_POLL_MAX_PER_SWEEP = value;
+      process.env.THREADS_POLL_MAX_POSTS_PER_SWEEP = value;
+      mocks.campaignFindMany.mockResolvedValue([
+        campaign("account-1", { matchAnyPost: true }),
+      ]);
+      mocks.getOwnedThreads.mockResolvedValue([{ id: "post-1" }]);
+
+      await reconcileThreadsReplies();
+
+      expect(mocks.getOwnedThreads).toHaveBeenCalledWith(
+        "plain-encrypted-account-1",
+        expectedPostCap
+      );
+      expect(mocks.getThreadsConversation).toHaveBeenCalledWith(
+        "plain-encrypted-account-1",
+        "post-1",
+        expectedReplyCap
+      );
+    }
+  );
 });

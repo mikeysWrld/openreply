@@ -16,6 +16,13 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown error";
 }
 
+function positiveInteger(value: string | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.max(1, Math.floor(parsed));
+}
+
 export async function reconcileThreadsReplies(): Promise<{
   conversations: number;
   observed: number;
@@ -31,13 +38,13 @@ export async function reconcileThreadsReplies(): Promise<{
       },
     },
   });
-  const maxReplies = Math.max(
-    1,
-    Number(process.env.THREADS_POLL_MAX_PER_SWEEP ?? 30)
+  const maxReplies = positiveInteger(
+    process.env.THREADS_POLL_MAX_PER_SWEEP,
+    30
   );
-  const maxPosts = Math.max(
-    1,
-    Number(process.env.THREADS_POLL_MAX_POSTS_PER_SWEEP ?? 100)
+  const maxPosts = positiveInteger(
+    process.env.THREADS_POLL_MAX_POSTS_PER_SWEEP,
+    100
   );
   const groups = new Map<string, ThreadsCampaignGroup>();
   let conversations = 0;
