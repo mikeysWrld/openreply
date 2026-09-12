@@ -84,6 +84,9 @@ model Workspace {
   linkClicks        LinkClick[]
   webhookEvents     WebhookEvent[]
   operationalEvents OperationalEvent[]
+  threadsAccounts   ThreadsAccount[]
+  threadsCampaigns  ThreadsCampaign[]
+  threadsReplyLogs  ThreadsReplyLog[]
 
   @@index([ownerId])
 }
@@ -143,6 +146,88 @@ model InstagramAccount {
   followerSnapshots FollowerSnapshot[]
 
   @@index([workspaceId])
+}
+
+model ThreadsAccount {
+  id             String   @id @default(cuid())
+  workspaceId    String
+  threadsUserId  String   @unique
+  username       String
+  accessToken    String
+  tokenExpiresAt DateTime?
+  connectedAt    DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  workspace        Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaigns        ThreadsCampaign[]
+  replyLogs        ThreadsReplyLog[]
+  processedReplies ProcessedThreadsReply[]
+
+  @@index([workspaceId])
+}
+
+model ThreadsCampaign {
+  id               String   @id @default(cuid())
+  workspaceId      String
+  threadsAccountId String
+  name             String
+  postId           String
+  postUrl          String
+  keywords         String[]
+  wholeWordMatch   Boolean  @default(true)
+  replyMessage     String
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  workspace      Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  threadsAccount ThreadsAccount    @relation(fields: [threadsAccountId], references: [id], onDelete: Cascade)
+  replyLogs      ThreadsReplyLog[]
+
+  @@index([workspaceId])
+  @@index([threadsAccountId])
+  @@index([postId])
+}
+
+model ThreadsReplyLog {
+  id                String             @id @default(cuid())
+  workspaceId       String
+  threadsCampaignId String
+  threadsAccountId  String
+  replyId           String
+  replyAuthorId     String?
+  replyAuthorName   String?
+  replyText         String
+  matchedKeyword    String?
+  status            ThreadsReplyStatus @default(PENDING)
+  attempts          Int                @default(0)
+  publishedReplyId  String?
+  replySentAt       DateTime?
+  errorMessage      String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  workspace      Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  threadsCampaign ThreadsCampaign @relation(fields: [threadsCampaignId], references: [id], onDelete: Cascade)
+  threadsAccount ThreadsAccount   @relation(fields: [threadsAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([threadsCampaignId, replyId])
+  @@index([workspaceId])
+  @@index([threadsAccountId])
+  @@index([status])
+}
+
+model ProcessedThreadsReply {
+  id               String   @id @default(cuid())
+  threadsAccountId String
+  replyId          String
+  source           String
+  seenAt           DateTime @default(now())
+
+  threadsAccount ThreadsAccount @relation(fields: [threadsAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([threadsAccountId, replyId])
+  @@index([threadsAccountId])
 }
 
 /// Daily follower total for one account. Instagram only retains ~30 days of
@@ -366,6 +451,12 @@ enum DmStatus {
   SKIPPED_RATE_LIMIT
   SKIPPED_PLAN_LIMIT
   SKIPPED_NO_MATCH
+}
+
+enum ThreadsReplyStatus {
+  PENDING
+  SENT
+  FAILED
 }
 
 enum WebhookStatus {
