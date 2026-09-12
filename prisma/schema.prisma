@@ -171,8 +171,9 @@ model ThreadsCampaign {
   workspaceId      String
   threadsAccountId String
   name             String
-  postId           String
-  postUrl          String
+  postId           String?
+  postUrl          String?
+  matchAnyPost     Boolean  @default(false)
   keywords         String[]
   wholeWordMatch   Boolean  @default(true)
   replyMessage     String
