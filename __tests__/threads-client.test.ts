@@ -114,6 +114,20 @@ describe("Threads API client", () => {
     });
   });
 
+  it("strips query parameters and fragments from a canonical post permalink", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      id: "post_1",
+      permalink: "https://www.threads.com/@golfrai/post/current/?source=share#replies",
+      owner: { id: "threads_user_1" },
+    }), { status: 200 })));
+
+    await expect(getThreadsPostDetails("secret-token", "post_1")).resolves.toEqual({
+      id: "post_1",
+      permalink: "https://www.threads.com/@golfrai/post/current/",
+      owner: { id: "threads_user_1" },
+    });
+  });
+
   it("keeps an untrusted post ID inside the Threads Graph path", async () => {
     const postId = "//evil.example/path";
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
@@ -151,6 +165,12 @@ describe("Threads API client", () => {
     { permalink: "https://evil.example/@golfrai/post/1", label: "foreign host" },
     { permalink: "https://user:password@threads.net/@golfrai/post/1", label: "credentials" },
     { permalink: "not-a-url", label: "malformed URL" },
+    { permalink: "https://threads.com/", label: "home path" },
+    { permalink: "https://threads.com/help", label: "help path" },
+    { permalink: "https://threads.com/@golfrai", label: "profile path" },
+    { permalink: "https://threads.com/@golfrai/replies/1", label: "wrong content path" },
+    { permalink: "https://threads.com/post/1", label: "missing handle path" },
+    { permalink: "https://threads.com/@golfrai/post/", label: "missing post ID path" },
   ])("rejects a $label post permalink", async ({ permalink }) => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
       id: "post_1",

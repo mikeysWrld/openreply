@@ -1,11 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import type { Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/db/client";
 import { decryptToken } from "@/lib/meta/oauth";
-import {
-  getThreadsPostDetails,
-  isCanonicalThreadsPermalink,
-} from "@/lib/threads/client";
+import { getThreadsPostDetails } from "@/lib/threads/client";
 import { canManageWorkspace, getCurrentWorkspaceContext } from "@/lib/workspace-access";
 
 export const dynamic = "force-dynamic";
@@ -22,7 +20,7 @@ const campaignFields = {
 const targetFields = {
   matchAnyPost: z.boolean(),
   postId: z.string().trim().min(1).nullable(),
-  postUrl: z.string().url().nullable().optional(),
+  postUrl: z.string().nullable().optional(),
 };
 
 const createSchema = z.object({
@@ -66,7 +64,7 @@ const allPostsTargetSchema = z.object({
 const specificPostTargetSchema = z.object({
   matchAnyPost: z.literal(false),
   postId: z.string().trim().min(1),
-  postUrl: z.string().url().nullable().optional(),
+  postUrl: z.string().nullable().optional(),
 });
 
 const updateSchema = z.intersection(
@@ -182,15 +180,17 @@ export async function PATCH(request: NextRequest) {
   const id = request.nextUrl.searchParams.get("id");
   const parsed = updateSchema.safeParse(await request.json().catch(() => null));
   if (!id || !parsed.success) return NextResponse.json({ success: false, error: "Invalid request" }, { status: 400 });
-  let updateData = parsed.data;
-  if (parsed.data.matchAnyPost === false) {
+  let updateData: Prisma.ThreadsCampaignUpdateManyMutationInput = parsed.data;
+  const suppliesSpecificTarget = parsed.data.matchAnyPost === false;
+  const activatesExistingTarget =
+    parsed.data.matchAnyPost === undefined && parsed.data.isActive === true;
+  if (suppliesSpecificTarget || activatesExistingTarget) {
     const campaign = await prisma.threadsCampaign.findFirst({
       where: { id, workspaceId: context.workspaceId },
       select: {
         id: true,
         matchAnyPost: true,
         postId: true,
-        postUrl: true,
         threadsAccount: {
           select: { accessToken: true, threadsUserId: true },
         },
@@ -200,26 +200,29 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ success: false, error: "Not found" }, { status: 404 });
     }
 
-    let postUrl =
-      !campaign.matchAnyPost &&
-      campaign.postId === parsed.data.postId &&
-      isCanonicalThreadsPermalink(campaign.postUrl)
-        ? campaign.postUrl
-        : null;
-    if (!postUrl) {
+    if (suppliesSpecificTarget || !campaign.matchAnyPost) {
+      const postId = suppliesSpecificTarget ? parsed.data.postId : campaign.postId;
+      if (!postId) {
+        return NextResponse.json(
+          { success: false, error: "Specific-post campaign is missing a post ID" },
+          { status: 400 }
+        );
+      }
+
+      let postUrl: string | null;
       try {
         postUrl = await getCanonicalOwnedPostUrl(
           campaign.threadsAccount.accessToken,
           campaign.threadsAccount.threadsUserId,
-          parsed.data.postId
+          postId
         );
       } catch {
         console.error("[Threads Campaigns] Failed to verify post ownership");
         return postVerificationFailedResponse();
       }
+      if (!postUrl) return postNotOwnedResponse();
+      updateData = { ...parsed.data, postUrl };
     }
-    if (!postUrl) return postNotOwnedResponse();
-    updateData = { ...parsed.data, postUrl };
   }
   const updated = await prisma.threadsCampaign.updateMany({
     where: { id, workspaceId: context.workspaceId },

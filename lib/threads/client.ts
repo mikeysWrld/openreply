@@ -153,8 +153,8 @@ export function getOwnedThreads(
   );
 }
 
-export function isCanonicalThreadsPermalink(value: unknown): value is string {
-  if (typeof value !== "string" || value.trim().length === 0) return false;
+function normalizeThreadsPermalink(value: unknown): string | null {
+  if (typeof value !== "string" || value.trim().length === 0) return null;
   try {
     const url = new URL(value);
     const isThreadsHost = THREADS_PERMALINK_DOMAINS.some((domain) =>
@@ -162,13 +162,15 @@ export function isCanonicalThreadsPermalink(value: unknown): value is string {
       (url.hostname.length > domain.length + 1 &&
         url.hostname.endsWith(`.${domain}`))
     );
-    return url.protocol === "https:" &&
+    const isCanonicalPost = url.protocol === "https:" &&
       isThreadsHost &&
       url.username === "" &&
       url.password === "" &&
-      url.port === "";
+      url.port === "" &&
+      /^\/@[^/]+\/post\/[^/]+\/?$/.test(url.pathname);
+    return isCanonicalPost ? `${url.origin}${url.pathname}` : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -191,10 +193,11 @@ export async function getThreadsPostDetails(
     throw invalidThreadsResponse();
   }
   const ownerId = requireThreadsString(post.owner.id);
-  if (!isCanonicalThreadsPermalink(post.permalink)) {
+  const permalink = normalizeThreadsPermalink(post.permalink);
+  if (!permalink) {
     throw invalidThreadsResponse();
   }
-  return { id, permalink: post.permalink, owner: { id: ownerId } };
+  return { id, permalink, owner: { id: ownerId } };
 }
 
 export function getThreadsConversation(

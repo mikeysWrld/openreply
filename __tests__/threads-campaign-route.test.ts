@@ -9,7 +9,6 @@ const mocks = vi.hoisted(() => ({
   updateMany: vi.fn(),
   decryptToken: vi.fn(),
   getThreadsPostDetails: vi.fn(),
-  isCanonicalThreadsPermalink: vi.fn(),
 }));
 
 vi.mock("@/lib/workspace-access", () => ({
@@ -31,7 +30,6 @@ vi.mock("@/lib/meta/oauth", () => ({
 }));
 vi.mock("@/lib/threads/client", () => ({
   getThreadsPostDetails: mocks.getThreadsPostDetails,
-  isCanonicalThreadsPermalink: mocks.isCanonicalThreadsPermalink,
 }));
 
 import { PATCH, POST } from "../app/api/threads/campaigns/route";
@@ -50,7 +48,6 @@ const validBody = {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.decryptToken.mockReturnValue("plain-token");
-  mocks.isCanonicalThreadsPermalink.mockReturnValue(true);
 });
 
 describe("Threads campaign API", () => {
@@ -123,6 +120,34 @@ describe("Threads campaign API", () => {
       data: expect.objectContaining({
         postId: "post_1",
         postUrl: "https://threads.net/@golfrai/post/canonical",
+      }),
+    });
+  });
+
+  it("ignores an arbitrary stale client post URL for a valid specific post", async () => {
+    mocks.context.mockResolvedValue({ workspaceId: "workspace_1", role: "OWNER" });
+    mocks.account.mockResolvedValue({
+      id: "account_1",
+      accessToken: "encrypted-token",
+      threadsUserId: "threads_user_1",
+    });
+    mocks.getThreadsPostDetails.mockResolvedValue({
+      id: "post_1",
+      permalink: "https://threads.com/@golfrai/post/canonical",
+      owner: { id: "threads_user_1" },
+    });
+    mocks.create.mockResolvedValue({ id: "campaign_1" });
+
+    const response = await POST(new NextRequest("https://example.com/api/threads/campaigns", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...validBody, postUrl: "stale and not a URL" }),
+    }));
+
+    expect(response.status).toBe(201);
+    expect(mocks.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        postUrl: "https://threads.com/@golfrai/post/canonical",
       }),
     });
   });
@@ -307,8 +332,23 @@ describe("Threads campaign API", () => {
     expect(mocks.updateMany).not.toHaveBeenCalled();
   });
 
-  it("updates isActive without requiring target fields", async () => {
+  it("verifies and repairs a stored specific target before activation", async () => {
     mocks.context.mockResolvedValue({ workspaceId: "workspace_1", role: "OWNER" });
+    mocks.campaign.mockResolvedValue({
+      id: "campaign_1",
+      matchAnyPost: false,
+      postId: "post_1",
+      postUrl: "https://threads.com/@someone/post/legacy",
+      threadsAccount: {
+        accessToken: "campaign-encrypted-token",
+        threadsUserId: "threads_user_1",
+      },
+    });
+    mocks.getThreadsPostDetails.mockResolvedValue({
+      id: "post_1",
+      permalink: "https://threads.com/@golfrai/post/canonical",
+      owner: { id: "threads_user_1" },
+    });
     mocks.updateMany.mockResolvedValue({ count: 1 });
 
     const response = await PATCH(new NextRequest("https://example.com/api/threads/campaigns?id=campaign_1", {
@@ -320,9 +360,79 @@ describe("Threads campaign API", () => {
     expect(response.status).toBe(200);
     expect(mocks.updateMany).toHaveBeenCalledWith({
       where: { id: "campaign_1", workspaceId: "workspace_1" },
-      data: { isActive: true },
+      data: {
+        isActive: true,
+        postUrl: "https://threads.com/@golfrai/post/canonical",
+      },
     });
+    expect(mocks.getThreadsPostDetails).toHaveBeenCalledWith("plain-token", "post_1");
+  });
+
+  it("rejects activation when the stored specific target belongs to another account", async () => {
+    mocks.context.mockResolvedValue({ workspaceId: "workspace_1", role: "OWNER" });
+    mocks.campaign.mockResolvedValue({
+      id: "campaign_1",
+      matchAnyPost: false,
+      postId: "post_1",
+      postUrl: "https://threads.com/@someone/post/legacy",
+      threadsAccount: {
+        accessToken: "campaign-encrypted-token",
+        threadsUserId: "threads_user_1",
+      },
+    });
+    mocks.getThreadsPostDetails.mockResolvedValue({
+      id: "post_1",
+      permalink: "https://threads.com/@someone/post/legacy",
+      owner: { id: "threads_user_2" },
+    });
+
+    const response = await PATCH(new NextRequest("https://example.com/api/threads/campaigns?id=campaign_1", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ isActive: true }),
+    }));
+
+    expect(response.status).toBe(400);
+    expect(mocks.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("rejects activation when a stored specific target has no post ID", async () => {
+    mocks.context.mockResolvedValue({ workspaceId: "workspace_1", role: "OWNER" });
+    mocks.campaign.mockResolvedValue({
+      id: "campaign_1",
+      matchAnyPost: false,
+      postId: null,
+      postUrl: null,
+      threadsAccount: {
+        accessToken: "campaign-encrypted-token",
+        threadsUserId: "threads_user_1",
+      },
+    });
+
+    const response = await PATCH(new NextRequest("https://example.com/api/threads/campaigns?id=campaign_1", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ isActive: true }),
+    }));
+
+    expect(response.status).toBe(400);
+    expect(mocks.getThreadsPostDetails).not.toHaveBeenCalled();
+    expect(mocks.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("pauses a campaign without loading or verifying its target", async () => {
+    mocks.context.mockResolvedValue({ workspaceId: "workspace_1", role: "OWNER" });
+    mocks.updateMany.mockResolvedValue({ count: 1 });
+
+    const response = await PATCH(new NextRequest("https://example.com/api/threads/campaigns?id=campaign_1", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ isActive: false }),
+    }));
+
+    expect(response.status).toBe(200);
     expect(mocks.campaign).not.toHaveBeenCalled();
+    expect(mocks.decryptToken).not.toHaveBeenCalled();
     expect(mocks.getThreadsPostDetails).not.toHaveBeenCalled();
   });
 
@@ -351,7 +461,7 @@ describe("Threads campaign API", () => {
       body: JSON.stringify({
         matchAnyPost: false,
         postId: "post_2",
-        postUrl: "https://attacker.example/forged",
+        postUrl: "stale and not a URL",
       }),
     }));
 
@@ -362,7 +472,6 @@ describe("Threads campaign API", () => {
         id: true,
         matchAnyPost: true,
         postId: true,
-        postUrl: true,
         threadsAccount: { select: { accessToken: true, threadsUserId: true } },
       },
     });
@@ -378,7 +487,7 @@ describe("Threads campaign API", () => {
     });
   });
 
-  it("preserves the stored canonical URL without Meta when PATCH repeats the same target", async () => {
+  it("rejects a valid-looking legacy foreign target when PATCH repeats the same post ID", async () => {
     mocks.context.mockResolvedValue({ workspaceId: "workspace_1", role: "OWNER" });
     mocks.campaign.mockResolvedValue({
       id: "campaign_1",
@@ -390,7 +499,11 @@ describe("Threads campaign API", () => {
         threadsUserId: "threads_user_1",
       },
     });
-    mocks.updateMany.mockResolvedValue({ count: 1 });
+    mocks.getThreadsPostDetails.mockResolvedValue({
+      id: "post_1",
+      permalink: "https://www.threads.net/@someone/post/canonical-1",
+      owner: { id: "threads_user_2" },
+    });
 
     const response = await PATCH(new NextRequest("https://example.com/api/threads/campaigns?id=campaign_1", {
       method: "PATCH",
@@ -403,21 +516,10 @@ describe("Threads campaign API", () => {
       }),
     }));
 
-    expect(response.status).toBe(200);
-    expect(mocks.isCanonicalThreadsPermalink).toHaveBeenCalledWith(
-      "https://www.threads.net/@golfrai/post/canonical-1"
-    );
-    expect(mocks.decryptToken).not.toHaveBeenCalled();
-    expect(mocks.getThreadsPostDetails).not.toHaveBeenCalled();
-    expect(mocks.updateMany).toHaveBeenCalledWith({
-      where: { id: "campaign_1", workspaceId: "workspace_1" },
-      data: {
-        name: "Renamed campaign",
-        matchAnyPost: false,
-        postId: "post_1",
-        postUrl: "https://www.threads.net/@golfrai/post/canonical-1",
-      },
-    });
+    expect(response.status).toBe(400);
+    expect(mocks.decryptToken).toHaveBeenCalledWith("campaign-encrypted-token");
+    expect(mocks.getThreadsPostDetails).toHaveBeenCalledWith("plain-token", "post_1");
+    expect(mocks.updateMany).not.toHaveBeenCalled();
   });
 
   it("repairs a legacy invalid URL when PATCH repeats the same target", async () => {
@@ -432,7 +534,6 @@ describe("Threads campaign API", () => {
         threadsUserId: "threads_user_1",
       },
     });
-    mocks.isCanonicalThreadsPermalink.mockReturnValue(false);
     mocks.getThreadsPostDetails.mockResolvedValue({
       id: "post_1",
       permalink: "https://threads.net/@golfrai/post/canonical-1",
