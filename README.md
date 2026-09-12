@@ -116,6 +116,16 @@ Built and maintained by Diwen Huang.
 
 OpenReply was initially forked from [instagram-comment-to-dm](https://github.com/im-anishraj/instagram-comment-to-dm) by [Anish Raj](https://github.com/im-anishraj), also MIT licensed, and has been substantially built upon since.
 
+## Star History
+
+<a href="https://www.star-history.com/?repos=diwenne%2Fopenreply&type=date&legend=top-left">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=diwenne/openreply&type=date&theme=dark&legend=top-left" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=diwenne/openreply&type=date&legend=top-left" />
+    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=diwenne/openreply&type=date&legend=top-left" />
+  </picture>
+</a>
+
 ## Star the repo
 
 If OpenReply is useful to you, star it. It is the simplest way to help the project reach the next person looking for a free way to do this.
