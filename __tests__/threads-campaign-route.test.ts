@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   context: vi.fn(),
   account: vi.fn(),
   create: vi.fn(),
+  updateMany: vi.fn(),
 }));
 
 vi.mock("@/lib/workspace-access", () => ({
@@ -14,11 +15,11 @@ vi.mock("@/lib/workspace-access", () => ({
 vi.mock("@/lib/db/client", () => ({
   prisma: {
     threadsAccount: { findFirst: mocks.account },
-    threadsCampaign: { create: mocks.create },
+    threadsCampaign: { create: mocks.create, updateMany: mocks.updateMany },
   },
 }));
 
-import { POST } from "../app/api/threads/campaigns/route";
+import { PATCH, POST } from "../app/api/threads/campaigns/route";
 
 const validBody = {
   name: "Threads 公開回覆",
@@ -70,5 +71,92 @@ describe("Threads campaign API", () => {
       body: JSON.stringify({ ...validBody, keywords: [] }),
     }));
     expect(response.status).toBe(400);
+  });
+
+  it("normalizes post fields when creating an all-posts campaign", async () => {
+    mocks.context.mockResolvedValue({ workspaceId: "workspace_1", role: "OWNER" });
+    mocks.account.mockResolvedValue({ id: "account_1" });
+    mocks.create.mockResolvedValue({ id: "campaign_1" });
+
+    const response = await POST(new NextRequest("https://example.com/api/threads/campaigns", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...validBody, matchAnyPost: true }),
+    }));
+
+    expect(response.status).toBe(201);
+    expect(mocks.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        workspaceId: "workspace_1",
+        matchAnyPost: true,
+        postId: null,
+        postUrl: null,
+      }),
+    });
+  });
+
+  it("rejects a specific-post create without valid target fields", async () => {
+    mocks.context.mockResolvedValue({ workspaceId: "workspace_1", role: "OWNER" });
+
+    const response = await POST(new NextRequest("https://example.com/api/threads/campaigns", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...validBody, matchAnyPost: false, postId: "", postUrl: null }),
+    }));
+
+    expect(response.status).toBe(400);
+    expect(mocks.account).not.toHaveBeenCalled();
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it("normalizes post fields when switching a campaign to all posts", async () => {
+    mocks.context.mockResolvedValue({ workspaceId: "workspace_1", role: "OWNER" });
+    mocks.updateMany.mockResolvedValue({ count: 1 });
+
+    const response = await PATCH(new NextRequest("https://example.com/api/threads/campaigns?id=campaign_1", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        matchAnyPost: true,
+        postId: "stale_post",
+        postUrl: "https://www.threads.net/@golfrai/post/stale",
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.updateMany).toHaveBeenCalledWith({
+      where: { id: "campaign_1", workspaceId: "workspace_1" },
+      data: { matchAnyPost: true, postId: null, postUrl: null },
+    });
+  });
+
+  it("rejects an incomplete switch to a specific post", async () => {
+    mocks.context.mockResolvedValue({ workspaceId: "workspace_1", role: "OWNER" });
+
+    const response = await PATCH(new NextRequest("https://example.com/api/threads/campaigns?id=campaign_1", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ matchAnyPost: false, postId: "post_2" }),
+    }));
+
+    expect(response.status).toBe(400);
+    expect(mocks.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("updates isActive without requiring target fields", async () => {
+    mocks.context.mockResolvedValue({ workspaceId: "workspace_1", role: "OWNER" });
+    mocks.updateMany.mockResolvedValue({ count: 1 });
+
+    const response = await PATCH(new NextRequest("https://example.com/api/threads/campaigns?id=campaign_1", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ isActive: true }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.updateMany).toHaveBeenCalledWith({
+      where: { id: "campaign_1", workspaceId: "workspace_1" },
+      data: { isActive: true },
+    });
   });
 });

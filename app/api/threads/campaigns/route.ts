@@ -8,24 +8,70 @@ export const dynamic = "force-dynamic";
 const campaignFields = {
   name: z.string().trim().min(1).max(100),
   threadsAccountId: z.string().min(1),
-  postId: z.string().min(1),
-  postUrl: z.string().url(),
   keywords: z.array(z.string().trim().min(1).max(50)).min(1).max(10),
   wholeWordMatch: z.boolean().default(true),
   replyMessage: z.string().trim().min(1).max(500),
   isActive: z.boolean().default(false),
 };
 
-const createSchema = z.object(campaignFields);
-const updateSchema = z.object({
+const targetFields = {
+  matchAnyPost: z.boolean(),
+  postId: z.string().trim().min(1).nullable(),
+  postUrl: z.string().url().nullable(),
+};
+
+const createSchema = z.object({
+  ...campaignFields,
+  ...targetFields,
+  matchAnyPost: targetFields.matchAnyPost.default(false),
+}).superRefine((data, context) => {
+  if (!data.matchAnyPost && (!data.postId || !data.postUrl)) {
+    context.addIssue({
+      code: "custom",
+      message: "A post ID and URL are required for a specific-post campaign",
+      path: [!data.postId ? "postId" : "postUrl"],
+    });
+  }
+}).transform((data) => data.matchAnyPost
+  ? { ...data, postId: null, postUrl: null }
+  : data
+);
+
+const editableUpdateFields = {
   name: campaignFields.name.optional(),
-  postId: campaignFields.postId.optional(),
-  postUrl: campaignFields.postUrl.optional(),
   keywords: campaignFields.keywords.optional(),
   wholeWordMatch: z.boolean().optional(),
   replyMessage: campaignFields.replyMessage.optional(),
   isActive: z.boolean().optional(),
-});
+};
+
+const updateSchema = z.object({
+  ...editableUpdateFields,
+  matchAnyPost: targetFields.matchAnyPost.optional(),
+  postId: targetFields.postId.optional(),
+  postUrl: targetFields.postUrl.optional(),
+}).superRefine((data, context) => {
+  const hasPostId = data.postId !== undefined;
+  const hasPostUrl = data.postUrl !== undefined;
+
+  if (data.matchAnyPost === undefined && (hasPostId || hasPostUrl)) {
+    context.addIssue({
+      code: "custom",
+      message: "Target fields must be updated atomically",
+      path: ["matchAnyPost"],
+    });
+  }
+  if (data.matchAnyPost === false && (!data.postId || !data.postUrl)) {
+    context.addIssue({
+      code: "custom",
+      message: "A post ID and URL are required when switching to a specific post",
+      path: [!data.postId ? "postId" : "postUrl"],
+    });
+  }
+}).transform((data) => data.matchAnyPost === true
+  ? { ...data, postId: null, postUrl: null }
+  : data
+);
 
 export async function GET(request: NextRequest) {
   const context = await getCurrentWorkspaceContext();
