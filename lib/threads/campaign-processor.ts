@@ -39,7 +39,11 @@ export async function processObservedThreadsReply(input: {
       isActive: true,
       OR: [
         { matchAnyPost: true },
-        { matchAnyPost: false, postId: input.rootPostId },
+        {
+          matchAnyPost: false,
+          postId: input.rootPostId,
+          postVerifiedAt: { not: null },
+        },
       ],
     },
     orderBy: [

@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/db/client";
 import { decryptToken } from "@/lib/meta/oauth";
-import { getThreadsPostDetails } from "@/lib/threads/client";
+import { getThreadsPostDetails, ThreadsApiError } from "@/lib/threads/client";
 import { canManageWorkspace, getCurrentWorkspaceContext } from "@/lib/workspace-access";
 
 export const dynamic = "force-dynamic";
@@ -17,9 +17,15 @@ const campaignFields = {
   isActive: z.boolean().default(false),
 };
 
+const threadsPostId = z.string()
+  .trim()
+  .min(1)
+  .max(200)
+  .regex(/^[A-Za-z0-9_-]+$/, "Invalid Threads post ID");
+
 const targetFields = {
   matchAnyPost: z.boolean(),
-  postId: z.string().trim().min(1).nullable(),
+  postId: threadsPostId.nullable(),
   postUrl: z.string().nullable().optional(),
 };
 
@@ -36,7 +42,7 @@ const createSchema = z.object({
     });
   }
 }).transform((data) => data.matchAnyPost
-  ? { ...data, postId: null, postUrl: null }
+  ? { ...data, postId: null, postUrl: null, postVerifiedAt: null }
   : data
 );
 
@@ -59,11 +65,16 @@ const allPostsTargetSchema = z.object({
   matchAnyPost: z.literal(true),
   postId: z.null().optional(),
   postUrl: z.null().optional(),
-}).transform((data) => ({ ...data, postId: null, postUrl: null }));
+}).transform((data) => ({
+  ...data,
+  postId: null,
+  postUrl: null,
+  postVerifiedAt: null,
+}));
 
 const specificPostTargetSchema = z.object({
   matchAnyPost: z.literal(false),
-  postId: z.string().trim().min(1),
+  postId: threadsPostId,
   postUrl: z.string().nullable().optional(),
 });
 
@@ -96,6 +107,12 @@ function postVerificationFailedResponse() {
     { success: false, error: "Failed to verify Threads post ownership" },
     { status: 502 }
   );
+}
+
+function isNotOwnedMetaError(error: unknown): boolean {
+  return error instanceof ThreadsApiError &&
+    !error.retryable &&
+    (error.status === 400 || error.status === 404);
 }
 
 export async function GET(request: NextRequest) {
@@ -161,14 +178,20 @@ export async function POST(request: NextRequest) {
         account.threadsUserId,
         parsed.data.postId!
       );
-    } catch {
+    } catch (error) {
+      if (isNotOwnedMetaError(error)) return postNotOwnedResponse();
       console.error("[Threads Campaigns] Failed to verify post ownership");
       return postVerificationFailedResponse();
     }
     if (!postUrl) return postNotOwnedResponse();
   }
   const campaign = await prisma.threadsCampaign.create({
-    data: { workspaceId: context.workspaceId, ...parsed.data, postUrl },
+    data: {
+      workspaceId: context.workspaceId,
+      ...parsed.data,
+      postUrl,
+      postVerifiedAt: parsed.data.matchAnyPost ? null : new Date(),
+    },
   });
   return NextResponse.json({ success: true, data: campaign }, { status: 201 });
 }
@@ -181,6 +204,11 @@ export async function PATCH(request: NextRequest) {
   const parsed = updateSchema.safeParse(await request.json().catch(() => null));
   if (!id || !parsed.success) return NextResponse.json({ success: false, error: "Invalid request" }, { status: 400 });
   let updateData: Prisma.ThreadsCampaignUpdateManyMutationInput = parsed.data;
+  let updateWhere: Prisma.ThreadsCampaignWhereInput = {
+    id,
+    workspaceId: context.workspaceId,
+  };
+  let guardedActivation = false;
   const suppliesSpecificTarget = parsed.data.matchAnyPost === false;
   const activatesExistingTarget =
     parsed.data.matchAnyPost === undefined && parsed.data.isActive === true;
@@ -200,6 +228,15 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ success: false, error: "Not found" }, { status: 404 });
     }
 
+    if (activatesExistingTarget) {
+      guardedActivation = true;
+      updateWhere = {
+        ...updateWhere,
+        matchAnyPost: campaign.matchAnyPost,
+        postId: campaign.postId,
+      };
+    }
+
     if (suppliesSpecificTarget || !campaign.matchAnyPost) {
       const postId = suppliesSpecificTarget ? parsed.data.postId : campaign.postId;
       if (!postId) {
@@ -216,18 +253,25 @@ export async function PATCH(request: NextRequest) {
           campaign.threadsAccount.threadsUserId,
           postId
         );
-      } catch {
+      } catch (error) {
+        if (isNotOwnedMetaError(error)) return postNotOwnedResponse();
         console.error("[Threads Campaigns] Failed to verify post ownership");
         return postVerificationFailedResponse();
       }
       if (!postUrl) return postNotOwnedResponse();
-      updateData = { ...parsed.data, postUrl };
+      updateData = { ...parsed.data, postUrl, postVerifiedAt: new Date() };
     }
   }
   const updated = await prisma.threadsCampaign.updateMany({
-    where: { id, workspaceId: context.workspaceId },
+    where: updateWhere,
     data: updateData,
   });
+  if (!updated.count && guardedActivation) {
+    return NextResponse.json(
+      { success: false, error: "Campaign target changed; retry activation" },
+      { status: 409 }
+    );
+  }
   if (!updated.count) return NextResponse.json({ success: false, error: "Not found" }, { status: 404 });
   return NextResponse.json({ success: true });
 }

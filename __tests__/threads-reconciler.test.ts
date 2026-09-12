@@ -85,7 +85,13 @@ describe("Threads polling reconciliation", () => {
     await reconcileThreadsReplies();
 
     expect(mocks.campaignFindMany).toHaveBeenCalledWith({
-      where: { isActive: true },
+      where: {
+        isActive: true,
+        OR: [
+          { matchAnyPost: true },
+          { matchAnyPost: false, postVerifiedAt: { not: null } },
+        ],
+      },
       select: {
         threadsAccountId: true,
         postId: true,

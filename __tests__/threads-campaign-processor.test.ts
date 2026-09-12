@@ -49,6 +49,7 @@ function campaign(overrides: Record<string, unknown> = {}) {
     wholeWordMatch: true,
     replyMessage: "Here is the link",
     isActive: true,
+    postVerifiedAt: null,
     createdAt: new Date("2026-01-01T00:00:00.000Z"),
     updatedAt: new Date("2026-01-01T00:00:00.000Z"),
     ...overrides,
@@ -154,7 +155,11 @@ describe("Threads campaign reply selection", () => {
         isActive: true,
         OR: [
           { matchAnyPost: true },
-          { matchAnyPost: false, postId: "future_post" },
+          {
+            matchAnyPost: false,
+            postId: "future_post",
+            postVerifiedAt: { not: null },
+          },
         ],
       },
       orderBy: [

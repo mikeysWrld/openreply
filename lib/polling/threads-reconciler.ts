@@ -38,7 +38,13 @@ async function runThreadsReconciliation(): Promise<ThreadsReconciliationResult> 
     console.error(`[Threads Poller] reply recovery: ${errorMessage(error)}`);
   }
   const campaigns = await prisma.threadsCampaign.findMany({
-    where: { isActive: true },
+    where: {
+      isActive: true,
+      OR: [
+        { matchAnyPost: true },
+        { matchAnyPost: false, postVerifiedAt: { not: null } },
+      ],
+    },
     select: {
       threadsAccountId: true,
       postId: true,

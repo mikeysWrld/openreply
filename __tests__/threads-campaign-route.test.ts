@@ -1,15 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
-const mocks = vi.hoisted(() => ({
-  context: vi.fn(),
-  account: vi.fn(),
-  campaign: vi.fn(),
-  create: vi.fn(),
-  updateMany: vi.fn(),
-  decryptToken: vi.fn(),
-  getThreadsPostDetails: vi.fn(),
-}));
+const mocks = vi.hoisted(() => {
+  class ThreadsApiError extends Error {
+    constructor(
+      message: string,
+      readonly status: number,
+      readonly code: number | null,
+      readonly retryable: boolean
+    ) {
+      super(message);
+    }
+  }
+  return {
+    context: vi.fn(),
+    account: vi.fn(),
+    campaign: vi.fn(),
+    create: vi.fn(),
+    updateMany: vi.fn(),
+    decryptToken: vi.fn(),
+    getThreadsPostDetails: vi.fn(),
+    ThreadsApiError,
+  };
+});
 
 vi.mock("@/lib/workspace-access", () => ({
   getCurrentWorkspaceContext: mocks.context,
@@ -30,6 +43,7 @@ vi.mock("@/lib/meta/oauth", () => ({
 }));
 vi.mock("@/lib/threads/client", () => ({
   getThreadsPostDetails: mocks.getThreadsPostDetails,
+  ThreadsApiError: mocks.ThreadsApiError,
 }));
 
 import { PATCH, POST } from "../app/api/threads/campaigns/route";
@@ -90,6 +104,7 @@ describe("Threads campaign API", () => {
         workspaceId: "workspace_1",
         isActive: false,
         postUrl: "https://www.threads.net/@golfrai/post/canonical",
+        postVerifiedAt: expect.any(Date),
       }),
     });
   });
@@ -120,6 +135,7 @@ describe("Threads campaign API", () => {
       data: expect.objectContaining({
         postId: "post_1",
         postUrl: "https://threads.net/@golfrai/post/canonical",
+        postVerifiedAt: expect.any(Date),
       }),
     });
   });
@@ -148,6 +164,7 @@ describe("Threads campaign API", () => {
     expect(mocks.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         postUrl: "https://threads.com/@golfrai/post/canonical",
+        postVerifiedAt: expect.any(Date),
       }),
     });
   });
@@ -186,7 +203,9 @@ describe("Threads campaign API", () => {
       accessToken: "encrypted-token",
       threadsUserId: "threads_user_1",
     });
-    mocks.getThreadsPostDetails.mockRejectedValue(new Error("token=secret-value"));
+    mocks.getThreadsPostDetails.mockRejectedValue(
+      new mocks.ThreadsApiError("token=secret-value", 500, null, true)
+    );
 
     const response = await POST(new NextRequest("https://example.com/api/threads/campaigns", {
       method: "POST",
@@ -198,6 +217,31 @@ describe("Threads campaign API", () => {
     await expect(response.json()).resolves.toEqual({
       success: false,
       error: "Failed to verify Threads post ownership",
+    });
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it.each([400, 404])("maps a non-retryable Meta %i response to not-owned", async (status) => {
+    mocks.context.mockResolvedValue({ workspaceId: "workspace_1", role: "OWNER" });
+    mocks.account.mockResolvedValue({
+      id: "account_1",
+      accessToken: "encrypted-token",
+      threadsUserId: "threads_user_1",
+    });
+    mocks.getThreadsPostDetails.mockRejectedValue(
+      new mocks.ThreadsApiError("secret Meta detail", status, 100, false)
+    );
+
+    const response = await POST(new NextRequest("https://example.com/api/threads/campaigns", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(validBody),
+    }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      success: false,
+      error: "Threads post not found for this account",
     });
     expect(mocks.create).not.toHaveBeenCalled();
   });
@@ -238,6 +282,24 @@ describe("Threads campaign API", () => {
     expect(response.status).toBe(400);
   });
 
+  it.each([
+    "x".repeat(201),
+    "post/../../escape",
+    "post id with spaces",
+  ])("rejects an oversized or unsafe post ID", async (postId) => {
+    mocks.context.mockResolvedValue({ workspaceId: "workspace_1", role: "OWNER" });
+
+    const response = await POST(new NextRequest("https://example.com/api/threads/campaigns", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...validBody, postId }),
+    }));
+
+    expect(response.status).toBe(400);
+    expect(mocks.account).not.toHaveBeenCalled();
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
   it("normalizes post fields when creating an all-posts campaign", async () => {
     mocks.context.mockResolvedValue({ workspaceId: "workspace_1", role: "OWNER" });
     mocks.account.mockResolvedValue({
@@ -260,6 +322,7 @@ describe("Threads campaign API", () => {
         matchAnyPost: true,
         postId: null,
         postUrl: null,
+        postVerifiedAt: null,
       }),
     });
     expect(mocks.decryptToken).not.toHaveBeenCalled();
@@ -297,7 +360,12 @@ describe("Threads campaign API", () => {
     expect(response.status).toBe(200);
     expect(mocks.updateMany).toHaveBeenCalledWith({
       where: { id: "campaign_1", workspaceId: "workspace_1" },
-      data: { matchAnyPost: true, postId: null, postUrl: null },
+      data: {
+        matchAnyPost: true,
+        postId: null,
+        postUrl: null,
+        postVerifiedAt: null,
+      },
     });
     expect(mocks.getThreadsPostDetails).not.toHaveBeenCalled();
   });
@@ -359,10 +427,16 @@ describe("Threads campaign API", () => {
 
     expect(response.status).toBe(200);
     expect(mocks.updateMany).toHaveBeenCalledWith({
-      where: { id: "campaign_1", workspaceId: "workspace_1" },
+      where: {
+        id: "campaign_1",
+        workspaceId: "workspace_1",
+        matchAnyPost: false,
+        postId: "post_1",
+      },
       data: {
         isActive: true,
         postUrl: "https://threads.com/@golfrai/post/canonical",
+        postVerifiedAt: expect.any(Date),
       },
     });
     expect(mocks.getThreadsPostDetails).toHaveBeenCalledWith("plain-token", "post_1");
@@ -394,6 +468,51 @@ describe("Threads campaign API", () => {
 
     expect(response.status).toBe(400);
     expect(mocks.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("returns 409 without a stale write when the target changes during activation", async () => {
+    mocks.context.mockResolvedValue({ workspaceId: "workspace_1", role: "OWNER" });
+    mocks.campaign.mockResolvedValue({
+      id: "campaign_1",
+      matchAnyPost: false,
+      postId: "post_1",
+      postUrl: null,
+      threadsAccount: {
+        accessToken: "campaign-encrypted-token",
+        threadsUserId: "threads_user_1",
+      },
+    });
+    mocks.getThreadsPostDetails.mockResolvedValue({
+      id: "post_1",
+      permalink: "https://threads.com/@golfrai/post/canonical",
+      owner: { id: "threads_user_1" },
+    });
+    mocks.updateMany.mockResolvedValue({ count: 0 });
+
+    const response = await PATCH(new NextRequest("https://example.com/api/threads/campaigns?id=campaign_1", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ isActive: true }),
+    }));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      success: false,
+      error: "Campaign target changed; retry activation",
+    });
+    expect(mocks.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: "campaign_1",
+        workspaceId: "workspace_1",
+        matchAnyPost: false,
+        postId: "post_1",
+      },
+      data: expect.objectContaining({
+        isActive: true,
+        postUrl: "https://threads.com/@golfrai/post/canonical",
+        postVerifiedAt: expect.any(Date),
+      }),
+    });
   });
 
   it("rejects activation when a stored specific target has no post ID", async () => {
@@ -483,6 +602,7 @@ describe("Threads campaign API", () => {
         matchAnyPost: false,
         postId: "post_2",
         postUrl: "https://www.threads.net/@golfrai/post/canonical-2",
+        postVerifiedAt: expect.any(Date),
       },
     });
   });
@@ -555,6 +675,7 @@ describe("Threads campaign API", () => {
         matchAnyPost: false,
         postId: "post_1",
         postUrl: "https://threads.net/@golfrai/post/canonical-1",
+        postVerifiedAt: expect.any(Date),
       },
     });
   });

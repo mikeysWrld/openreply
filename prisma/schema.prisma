@@ -173,6 +173,7 @@ model ThreadsCampaign {
   name             String
   postId           String?
   postUrl          String?
+  postVerifiedAt   DateTime?
   matchAnyPost     Boolean  @default(false)
   keywords         String[]
   wholeWordMatch   Boolean  @default(true)
