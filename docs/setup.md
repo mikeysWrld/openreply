@@ -260,6 +260,7 @@ An **All posts** campaign includes the account's newest existing posts, up to `T
 3. Enable the minimum permissions used by OpenReply:
    - `threads_basic`
    - `threads_read_replies`
+   - `threads_manage_replies`
    - `threads_content_publish`
 4. Add the Threads OAuth credentials to the web app environment in Vercel:
 
