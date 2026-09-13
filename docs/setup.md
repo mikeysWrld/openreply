@@ -279,19 +279,28 @@ An **All posts** campaign includes the account's newest existing posts, up to `T
    THREADS_REPLY_RECOVERY_MAX_PER_SWEEP=50
    ```
 
+   `THREADS_POLL_INTERVAL_MS=300000` is a five-minute recovery sweep. Normal reply detection comes from the webhook configured in the next step; do not reduce this to one second in production.
+
    `THREADS_POLL_MAX_POSTS_PER_SWEEP` is the per-account cap on newest owned posts rediscovered during each sweep. The default of `100` is intentionally bounded; accounts that need to monitor older history beyond that cap can raise it deliberately after considering the additional API traffic.
    `THREADS_REQUEST_TIMEOUT_MS` bounds every Threads network request, including web-app OAuth exchanges and worker polling/publishing calls. It must be a positive whole number of milliseconds and defaults to `15000` when omitted or invalid; only set it when both environments need a different timeout.
    `THREADS_REPLY_RECOVERY_MAX_PER_SWEEP` bounds how many retryable pending reply sends the worker re-enqueues per sweep after queue-level retries expire. It defaults to `50`.
 
    Threads sweep coalescing is process-local, which matches the current single-worker deployment. Public reply publishing is separately protected by a database-backed lease, so overlapping or manual worker executions cannot both publish the same pending log.
 
-   The web app and worker still need the shared database, Redis, and `ENCRYPTION_KEY` settings documented earlier. The worker reads the encrypted account token from the shared database and does not need `THREADS_APP_ID` or `THREADS_APP_SECRET`.
+   The web app and worker still need the shared database, Redis, and `ENCRYPTION_KEY` settings documented earlier. The worker reads the encrypted account token from the shared database and does not need `THREADS_APP_ID` or `THREADS_APP_SECRET`. Vercel needs `THREADS_APP_SECRET` to verify webhook signatures.
 
-5. Add the profile as a tester if Meta requires it while the app is in development mode, and accept the authorization from the Threads profile. This tester permission and profile authorization are outstanding operator steps until you complete them in Meta and Threads; repository setup does not complete App Review or grant them automatically.
-6. When deploying, redeploy Vercel after adding the OAuth variables and redeploy the always-on worker after adding the polling variables.
-7. In OpenReply, open **Settings**, click **Connect Threads**, approve the three permissions, and return to Settings.
+5. In the Threads use case's webhook settings, configure:
 
-Threads reply detection uses a conservative worker poll of each active campaign's flattened conversations. For **All posts**, each sweep first rediscovers the account's newest owned posts up to the configured cap. `ProcessedThreadsReply` records every observed reply, including non-matches, and `ThreadsReplyLog` records matched sends and failures. Self-authored replies are ignored and unique constraints prevent duplicate responses.
+   - Callback URL: `https://your-app.vercel.app/api/threads/webhook`
+   - Verify token: the exact `WEBHOOK_VERIFY_TOKEN` value configured in Vercel
+   - Subscribed field: `replies`
+
+   Meta signs deliveries with the Threads app secret. The callback validates the raw request body before storing or queueing an event.
+6. Add the profile as a tester if Meta requires it while the app is in development mode, and accept the authorization from the Threads profile. This tester permission and profile authorization are outstanding operator steps until you complete them in Meta and Threads; repository setup does not complete App Review or grant them automatically.
+7. When deploying, redeploy Vercel after adding the OAuth and webhook variables and redeploy the always-on worker after adding the polling variables.
+8. In OpenReply, open **Settings**, click **Connect Threads**, approve the four permissions, and return to Settings. Existing connections may need to reconnect after a permission change. In development mode, real deliveries remain limited to app roles and accepted Threads testers.
+
+Threads reply detection is webhook-first. Meta's `replies` delivery is stored and queued immediately, and the worker sends it through the same campaign processor used by reconciliation. A five-minute worker sweep remains as recovery for a delivery Meta misses. For **All posts**, each recovery sweep first rediscovers the account's newest owned posts up to the configured cap. `ProcessedThreadsReply` records every observed reply, including non-matches, and `ThreadsReplyLog` records matched sends and failures. Self-authored replies are ignored and unique constraints prevent duplicate responses across webhook and polling paths.
 
 ### First Threads campaign
 
@@ -307,7 +316,7 @@ The approved production keywords, to restore later while the campaign is paused,
 
 The prepared Traditional Chinese public reply is:
 
-`感謝你的關注！立即加入 Beta 測試名單：https://golfr.ai/`
+`感謝你的關注！立即加入 Beta 測試名單：https://golfr.life/`
 
 Activate the campaign with only the nonce keyword. From a different Threads account, post the nonce as one reply on an existing owned post. Then publish a new post from the connected profile and reply to it with the same nonce from the different account. Also post one non-matching reply and one nonce reply from the connected profile itself. Allow a complete worker sweep to process the test replies and mark every other observed historical reply as processed.
 

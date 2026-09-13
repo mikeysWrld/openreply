@@ -44,6 +44,7 @@ OpenReply is built around Meta's official Instagram private replies. It does not
 - Inbox. Read your Instagram DM conversations and reply from the dashboard, inside Meta's 24-hour messaging window. Cached so it loads instantly on repeat visits.
 - DM logs. Every send, skip, and failure is logged with a reason.
 - Self-comment filtering. Your own comments never trigger a reply, since Meta rejects DMing yourself anyway.
+- Threads public-reply campaigns. Monitor one owned post or all recent owned posts, match keywords in replies, and publish a configured public response. Threads webhooks handle new replies immediately; five-minute reconciliation catches missed deliveries.
 
 ## How it works
 
@@ -54,6 +55,8 @@ OpenReply is built around Meta's official Instagram private replies. It does not
 5. A background worker sends the private reply, and the public reply if you enabled one.
 
 The web app receives the webhook and serves the dashboard. A separate worker process does the sending, because the send has to survive rate limits and retries. Both talk to the same Postgres and Redis.
+
+Threads uses its own callback at `/api/threads/webhook` and subscribes to Meta's `replies` field. It shares the database and Redis reliability layer with Instagram while keeping Threads campaigns and public-reply logs separate.
 
 ## Quick start
 
@@ -95,7 +98,7 @@ If you use Claude Code, Cursor, or a similar tool, the Meta setup is a lot faste
 - BullMQ on Redis for the send queue and the worker
 - Auth.js (NextAuth) with email magic links through Resend
 - Tailwind CSS for the interface
-- The official Instagram API with Instagram Login
+- The official Instagram API with Instagram Login and the official Threads API
 
 For the complete stack — application libraries, the two runtime processes, and the free services this runs on (Vercel, Neon, Redis Cloud, an Oracle Cloud always-free VM for the worker, Resend, Meta) — see [docs/stack.md](docs/stack.md).
 
