@@ -16,6 +16,7 @@ const STATE_MAX_AGE_MS = 10 * 60 * 1000;
 const SCOPES = [
   "threads_basic",
   "threads_read_replies",
+  "threads_manage_replies",
   "threads_content_publish",
 ].join(",");
 

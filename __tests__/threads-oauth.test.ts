@@ -33,7 +33,7 @@ describe("Threads OAuth", () => {
     expect(url.origin + url.pathname).toBe("https://threads.net/oauth/authorize");
     expect(url.searchParams.get("client_id")).toBe("threads-app-id");
     expect(url.searchParams.get("scope")).toBe(
-      "threads_basic,threads_read_replies,threads_content_publish"
+      "threads_basic,threads_read_replies,threads_manage_replies,threads_content_publish"
     );
     expect(url.searchParams.get("state")).toBe("signed");
   });
