@@ -3,10 +3,13 @@ import { recordWorkerHeartbeat } from "@/lib/ops/worker-health";
 import { reconcileComments } from "@/lib/polling/comment-reconciler";
 import os from "node:os";
 import { createThreadsReplyWorker } from "@/lib/queue/threads-worker";
+import { createThreadsWebhookWorker } from "@/lib/queue/threads-webhook-worker";
 import { reconcileThreadsReplies } from "@/lib/polling/threads-reconciler";
+import { getThreadsPollIntervalMs } from "@/lib/polling/interval";
 
 const worker = createDMWorker();
 const threadsWorker = createThreadsReplyWorker();
+const threadsWebhookWorker = createThreadsWebhookWorker();
 const startedAt = new Date().toISOString();
 const HEARTBEAT_INTERVAL_MS = 30_000;
 // Polling safety net for comments that webhooks miss. Runs in the worker because
@@ -14,9 +17,7 @@ const HEARTBEAT_INTERVAL_MS = 30_000;
 const POLL_INTERVAL_MS = Number(
   process.env.COMMENT_POLL_INTERVAL_MS ?? 5 * 60_000
 );
-const THREADS_POLL_INTERVAL_MS = Number(
-  process.env.THREADS_POLL_INTERVAL_MS ?? 5 * 60_000
-);
+const THREADS_POLL_INTERVAL_MS = getThreadsPollIntervalMs();
 
 console.log("[DM Worker] Started");
 
@@ -69,7 +70,11 @@ async function shutdown(signal: string) {
   clearInterval(heartbeatTimer);
   clearInterval(pollTimer);
   clearInterval(threadsPollTimer);
-  await Promise.all([worker.close(), threadsWorker.close()]);
+  await Promise.all([
+    worker.close(),
+    threadsWorker.close(),
+    threadsWebhookWorker.close(),
+  ]);
   process.exit(0);
 }
 
