@@ -6,6 +6,7 @@
 
 import { Queue } from "bullmq";
 import Redis from "ioredis";
+import type { ThreadsWebhookReplyEvent } from "@/lib/threads/webhook";
 
 let connection: Redis | null = null;
 
@@ -127,4 +128,31 @@ export function getThreadsReplyQueue(): Queue<ProcessThreadsReplyJob> {
     );
   }
   return threadsReplyQueue;
+}
+
+export interface ProcessThreadsWebhookJob {
+  webhookEventId: string;
+  events: ThreadsWebhookReplyEvent[];
+}
+
+export const THREADS_WEBHOOK_JOB_NAME = "process-threads-webhook";
+
+let threadsWebhookQueue: Queue<ProcessThreadsWebhookJob> | null = null;
+
+export function getThreadsWebhookQueue(): Queue<ProcessThreadsWebhookJob> {
+  if (!threadsWebhookQueue) {
+    threadsWebhookQueue = new Queue<ProcessThreadsWebhookJob>(
+      "threads-webhook-processing",
+      {
+        connection: getRedisConnection(),
+        defaultJobOptions: {
+          removeOnComplete: { count: 1000 },
+          removeOnFail: { age: 300, count: 2000 },
+          attempts: 3,
+          backoff: { type: "exponential", delay: 5000 },
+        },
+      },
+    );
+  }
+  return threadsWebhookQueue;
 }
