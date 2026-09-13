@@ -22,10 +22,18 @@ export async function processObservedThreadsReply(input: {
 }): Promise<"queued" | "self" | "seen" | "no_match"> {
   const account = await prisma.threadsAccount.findUnique({
     where: { id: input.threadsAccountId },
-    select: { threadsUserId: true, workspaceId: true },
+    select: { threadsUserId: true, username: true, workspaceId: true },
   });
   if (!account) return "seen";
-  if (isOwnThreadsReply(input.reply, account.threadsUserId)) return "self";
+  if (
+    isOwnThreadsReply(
+      input.reply,
+      account.threadsUserId,
+      account.username,
+    )
+  ) {
+    return "self";
+  }
 
   const normalized = normalizeThreadsReply(input.reply);
   const outcome: TransactionOutcome = await prisma.$transaction(

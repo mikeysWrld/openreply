@@ -80,6 +80,7 @@ beforeEach(() => {
   transactionState.tail = Promise.resolve();
   mocks.accountFindUnique.mockResolvedValue({
     threadsUserId: "owner_1",
+    username: "golfrai",
     workspaceId: "workspace_1",
   });
   mocks.processedCreateMany.mockResolvedValue(undefined);
@@ -278,6 +279,24 @@ describe("Threads campaign reply selection", () => {
     const result = await processObservedThreadsReply({
       ...input,
       reply: { ...input.reply, owner: { id: "owner_1" } },
+    });
+
+    expect(result).toBe("self");
+    expect(mocks.processedCreateMany).not.toHaveBeenCalled();
+    expect(mocks.campaignFindMany).not.toHaveBeenCalled();
+    expect(mocks.logCreate).not.toHaveBeenCalled();
+    expect(mocks.queueAdd).not.toHaveBeenCalled();
+  });
+
+  it("does not record or queue a webhook reply from the connected username", async () => {
+    const result = await processObservedThreadsReply({
+      ...input,
+      reply: {
+        id: "reply_from_webhook",
+        text: "感謝你的關注！立即加入 Beta 測試名單：https://golfr.life/",
+        timestamp: "2026-01-02T00:00:00.000Z",
+        username: "GolfRai",
+      },
     });
 
     expect(result).toBe("self");

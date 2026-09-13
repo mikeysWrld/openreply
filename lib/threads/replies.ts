@@ -13,9 +13,21 @@ export interface NormalizedThreadsReply {
 
 export function isOwnThreadsReply(
   reply: ThreadsReply,
-  connectedUserId: string
+  connectedUserId: string,
+  connectedUsername?: string | null,
 ): boolean {
-  return reply.is_reply_owned_by_me === true || reply.owner?.id === connectedUserId;
+  if (reply.is_reply_owned_by_me === true || reply.owner?.id === connectedUserId) {
+    return true;
+  }
+
+  const normalizeUsername = (username: string) =>
+    username.trim().replace(/^@/, "").toLowerCase();
+
+  return Boolean(
+    reply.username &&
+      connectedUsername &&
+      normalizeUsername(reply.username) === normalizeUsername(connectedUsername),
+  );
 }
 
 export function normalizeThreadsReply(

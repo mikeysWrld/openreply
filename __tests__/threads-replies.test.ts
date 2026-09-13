@@ -28,4 +28,17 @@ describe("Threads reply normalization", () => {
     expect(isOwnThreadsReply({ id: "2", owner: { id: "me" } }, "me")).toBe(true);
     expect(isOwnThreadsReply({ id: "3", owner: { id: "other" } }, "me")).toBe(false);
   });
+
+  it("recognizes the connected username when webhook replies omit ownership fields", () => {
+    expect(isOwnThreadsReply(
+      { id: "4", username: "GolfRai" },
+      "threads-user-id",
+      "@golfrai",
+    )).toBe(true);
+    expect(isOwnThreadsReply(
+      { id: "5", username: "visitor" },
+      "threads-user-id",
+      "golfrai",
+    )).toBe(false);
+  });
 });
