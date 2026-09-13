@@ -42,7 +42,10 @@ const job: ProcessThreadsWebhookJob = {
 
 beforeEach(() => {
   vi.resetAllMocks();
-  mocks.accountFindUnique.mockResolvedValue({ id: "account_1" });
+  mocks.accountFindUnique.mockResolvedValue({
+    id: "account_1",
+    workspaceId: "workspace_1",
+  });
   mocks.processObserved.mockResolvedValue("queued");
   mocks.webhookUpdate.mockResolvedValue({});
 });
@@ -53,7 +56,7 @@ describe("Threads webhook ingestion worker", () => {
 
     expect(mocks.accountFindUnique).toHaveBeenCalledWith({
       where: { threadsUserId: "threads_user_1" },
-      select: { id: true },
+      select: { id: true, workspaceId: true },
     });
     expect(mocks.processObserved).toHaveBeenCalledWith({
       threadsAccountId: "account_1",
@@ -67,6 +70,7 @@ describe("Threads webhook ingestion worker", () => {
         status: "PROCESSED",
         errorMessage: null,
         processedAt: expect.any(Date),
+        workspaceId: "workspace_1",
       },
     });
   });
@@ -100,6 +104,7 @@ describe("Threads webhook ingestion worker", () => {
         status: "PROCESSED",
         errorMessage: null,
         processedAt: expect.any(Date),
+        workspaceId: undefined,
       },
     });
   });
@@ -119,6 +124,7 @@ describe("Threads webhook ingestion worker", () => {
         status: "FAILED",
         errorMessage: expect.any(String),
         processedAt: expect.any(Date),
+        workspaceId: "workspace_1",
       },
     });
     expect(failure.data.errorMessage).toHaveLength(500);

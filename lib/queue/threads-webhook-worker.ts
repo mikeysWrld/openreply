@@ -16,7 +16,11 @@ function errorMessage(error: unknown): string {
 export async function processThreadsWebhookJob(
   data: ProcessThreadsWebhookJob,
 ): Promise<void> {
-  const accounts = new Map<string, { id: string } | null>();
+  const accounts = new Map<
+    string,
+    { id: string; workspaceId: string } | null
+  >();
+  let workspaceId: string | undefined;
 
   try {
     for (const event of data.events) {
@@ -24,11 +28,12 @@ export async function processThreadsWebhookJob(
       if (account === undefined) {
         account = await prisma.threadsAccount.findUnique({
           where: { threadsUserId: event.threadsUserId },
-          select: { id: true },
+          select: { id: true, workspaceId: true },
         });
         accounts.set(event.threadsUserId, account);
       }
       if (!account) continue;
+      workspaceId ??= account.workspaceId;
 
       await processObservedThreadsReply({
         threadsAccountId: account.id,
@@ -44,6 +49,7 @@ export async function processThreadsWebhookJob(
         status: "PROCESSED",
         errorMessage: null,
         processedAt: new Date(),
+        workspaceId,
       },
     });
   } catch (error) {
@@ -54,6 +60,7 @@ export async function processThreadsWebhookJob(
           status: "FAILED",
           errorMessage: errorMessage(error),
           processedAt: new Date(),
+          workspaceId,
         },
       })
       .catch(() => {});
