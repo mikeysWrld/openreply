@@ -179,6 +179,7 @@ model ThreadsCampaign {
   wholeWordMatch   Boolean  @default(true)
   replyMessage     String
   isActive         Boolean  @default(false)
+  activatedAt      DateTime?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 

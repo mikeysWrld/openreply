@@ -14,7 +14,10 @@ function recoveryLimit(): number {
 
 export async function recoverPendingThreadsReplies(): Promise<number> {
   const logs = await prisma.threadsReplyLog.findMany({
-    where: { status: "PENDING" },
+    where: {
+      status: "PENDING",
+      threadsCampaign: { isActive: true },
+    },
     orderBy: { updatedAt: "asc" },
     take: recoveryLimit(),
     select: {

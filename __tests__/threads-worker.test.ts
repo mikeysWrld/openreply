@@ -69,8 +69,24 @@ describe("Threads reply worker", () => {
         threadsUserId: "42",
         accessToken: "encrypted",
       },
+      threadsCampaign: {
+        isActive: true,
+      },
     };
   }
+
+  it("does not publish a queued reply after its campaign is paused", async () => {
+    mocks.findUnique.mockResolvedValue({
+      ...log(),
+      threadsCampaign: { isActive: false },
+    });
+
+    await processThreadsReplyJob(job);
+
+    expect(mocks.createContainer).not.toHaveBeenCalled();
+    expect(mocks.getContainerStatus).not.toHaveBeenCalled();
+    expect(mocks.publish).not.toHaveBeenCalled();
+  });
 
   it("creates and persists a container before publishing it", async () => {
     mocks.findUnique.mockResolvedValue(log());

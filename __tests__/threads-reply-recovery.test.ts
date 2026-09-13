@@ -50,7 +50,10 @@ describe("Threads reply recovery", () => {
     await expect(recoverPendingThreadsReplies()).resolves.toBe(1);
 
     expect(mocks.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { status: "PENDING" },
+      where: {
+        status: "PENDING",
+        threadsCampaign: { isActive: true },
+      },
       take: 50,
     }));
     expect(mocks.queueAdd).toHaveBeenCalledWith(
@@ -73,7 +76,10 @@ describe("Threads reply recovery", () => {
     await expect(recoverPendingThreadsReplies()).resolves.toBe(0);
 
     expect(mocks.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { status: "PENDING" },
+      where: {
+        status: "PENDING",
+        threadsCampaign: { isActive: true },
+      },
     }));
     expect(mocks.queueAdd).not.toHaveBeenCalled();
   });

@@ -19,6 +19,7 @@ describe("Threads reply normalization", () => {
       rootPostId: "post_1",
       parentReplyId: "reply_1",
       ownedByMe: false,
+      timestamp: null,
     });
   });
 

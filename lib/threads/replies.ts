@@ -8,6 +8,7 @@ export interface NormalizedThreadsReply {
   rootPostId: string | null;
   parentReplyId: string | null;
   ownedByMe: boolean;
+  timestamp: Date | null;
 }
 
 export function isOwnThreadsReply(
@@ -20,6 +21,7 @@ export function isOwnThreadsReply(
 export function normalizeThreadsReply(
   reply: ThreadsReply
 ): NormalizedThreadsReply {
+  const timestamp = reply.timestamp ? new Date(reply.timestamp) : null;
   return {
     id: reply.id,
     text: reply.text ?? "",
@@ -28,5 +30,6 @@ export function normalizeThreadsReply(
     rootPostId: reply.root_post?.id ?? null,
     parentReplyId: reply.replied_to?.id ?? null,
     ownedByMe: reply.is_reply_owned_by_me === true,
+    timestamp: timestamp && !Number.isNaN(timestamp.getTime()) ? timestamp : null,
   };
 }

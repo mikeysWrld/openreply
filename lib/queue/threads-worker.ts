@@ -29,9 +29,12 @@ export async function processThreadsReplyJob(
       threadsAccount: {
         select: { threadsUserId: true, accessToken: true },
       },
+      threadsCampaign: {
+        select: { isActive: true },
+      },
     },
   });
-  if (!log || log.status !== "PENDING") return;
+  if (!log || log.status !== "PENDING" || !log.threadsCampaign.isActive) return;
 
   const leaseToken = randomUUID();
   const now = new Date();
@@ -58,9 +61,12 @@ export async function processThreadsReplyJob(
       threadsAccount: {
         select: { threadsUserId: true, accessToken: true },
       },
+      threadsCampaign: {
+        select: { isActive: true },
+      },
     },
   });
-  if (!claimedLog) return;
+  if (!claimedLog || !claimedLog.threadsCampaign.isActive) return;
 
   try {
     let accessToken: string;

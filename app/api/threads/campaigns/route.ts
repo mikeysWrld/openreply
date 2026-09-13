@@ -189,6 +189,7 @@ export async function POST(request: NextRequest) {
     data: {
       workspaceId: context.workspaceId,
       ...parsed.data,
+      activatedAt: parsed.data.isActive ? new Date() : null,
       postUrl,
       postVerifiedAt: parsed.data.matchAnyPost ? null : new Date(),
     },
@@ -210,13 +211,15 @@ export async function PATCH(request: NextRequest) {
   };
   let guardedActivation = false;
   const suppliesSpecificTarget = parsed.data.matchAnyPost === false;
+  const requestsActivation = parsed.data.isActive === true;
   const activatesExistingTarget =
-    parsed.data.matchAnyPost === undefined && parsed.data.isActive === true;
-  if (suppliesSpecificTarget || activatesExistingTarget) {
+    parsed.data.matchAnyPost === undefined && requestsActivation;
+  if (suppliesSpecificTarget || requestsActivation) {
     const campaign = await prisma.threadsCampaign.findFirst({
       where: { id, workspaceId: context.workspaceId },
       select: {
         id: true,
+        isActive: true,
         matchAnyPost: true,
         postId: true,
         threadsAccount: {
@@ -226,6 +229,10 @@ export async function PATCH(request: NextRequest) {
     });
     if (!campaign) {
       return NextResponse.json({ success: false, error: "Not found" }, { status: 404 });
+    }
+
+    if (requestsActivation && !campaign.isActive) {
+      updateData = { ...updateData, activatedAt: new Date() };
     }
 
     if (activatesExistingTarget) {
@@ -259,7 +266,7 @@ export async function PATCH(request: NextRequest) {
         return postVerificationFailedResponse();
       }
       if (!postUrl) return postNotOwnedResponse();
-      updateData = { ...parsed.data, postUrl, postVerifiedAt: new Date() };
+      updateData = { ...updateData, postUrl, postVerifiedAt: new Date() };
     }
   }
   const updated = await prisma.threadsCampaign.updateMany({
