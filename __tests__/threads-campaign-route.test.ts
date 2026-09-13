@@ -103,6 +103,7 @@ describe("Threads campaign API", () => {
       data: expect.objectContaining({
         workspaceId: "workspace_1",
         isActive: false,
+        activatedAt: null,
         postUrl: "https://www.threads.net/@golfrai/post/canonical",
         postVerifiedAt: expect.any(Date),
       }),
@@ -432,6 +433,7 @@ describe("Threads campaign API", () => {
       matchAnyPost: false,
       postId: "post_1",
       postUrl: "https://threads.com/@someone/post/legacy",
+      isActive: false,
       threadsAccount: {
         accessToken: "campaign-encrypted-token",
         threadsUserId: "threads_user_1",
@@ -460,6 +462,7 @@ describe("Threads campaign API", () => {
       },
       data: {
         isActive: true,
+        activatedAt: expect.any(Date),
         postUrl: "https://threads.com/@golfrai/post/canonical",
         postVerifiedAt: expect.any(Date),
       },
@@ -651,6 +654,7 @@ describe("Threads campaign API", () => {
       where: { id: "campaign_1", workspaceId: "workspace_1" },
       select: {
         id: true,
+        isActive: true,
         matchAnyPost: true,
         postId: true,
         threadsAccount: { select: { accessToken: true, threadsUserId: true } },

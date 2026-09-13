@@ -45,6 +45,7 @@ const input = {
   reply: {
     id: "reply_1",
     text: "Please send the LINK",
+    timestamp: "2026-01-02T00:00:00.000Z",
     username: "visitor",
     owner: { id: "visitor_1" },
   },
@@ -64,6 +65,7 @@ function campaign(overrides: Record<string, unknown> = {}) {
     wholeWordMatch: true,
     replyMessage: "Here is the link",
     isActive: true,
+    activatedAt: new Date("2026-01-01T00:00:00.000Z"),
     postVerifiedAt: null,
     createdAt: new Date("2026-01-01T00:00:00.000Z"),
     updatedAt: new Date("2026-01-01T00:00:00.000Z"),
@@ -186,6 +188,21 @@ describe("Threads campaign reply selection", () => {
       },
       { jobId: "threads_account_1_reply_1_campaign_1" }
     );
+  });
+
+  it("ignores a matching reply created before the campaign was activated", async () => {
+    mocks.campaignFindMany.mockResolvedValue([campaign()]);
+
+    await expect(processObservedThreadsReply({
+      ...input,
+      reply: {
+        ...input.reply,
+        timestamp: "2025-12-31T23:59:59.999Z",
+      },
+    })).resolves.toBe("no_match");
+
+    expect(mocks.logCreate).not.toHaveBeenCalled();
+    expect(mocks.queueAdd).not.toHaveBeenCalled();
   });
 
   it("selects a matching specific campaign before a matching all-post campaign", async () => {

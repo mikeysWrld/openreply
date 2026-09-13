@@ -61,6 +61,13 @@ export async function processObservedThreadsReply(input: {
       });
 
       for (const campaign of campaigns) {
+        if (
+          !normalized.timestamp ||
+          !campaign.activatedAt ||
+          normalized.timestamp <= campaign.activatedAt
+        ) {
+          continue;
+        }
         const match = matchKeywords(
           normalized.text,
           campaign.keywords,
