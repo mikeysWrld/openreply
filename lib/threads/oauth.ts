@@ -3,6 +3,12 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { requireEnv } from "@/lib/env";
+import {
+  invalidThreadsResponse,
+  readThreadsJson,
+  requireThreadsString,
+  threadsFetch,
+} from "@/lib/threads/fetch";
 
 const AUTHORIZE_URL = "https://threads.net/oauth/authorize";
 const GRAPH_URL = "https://graph.threads.net";
@@ -76,52 +82,56 @@ export function getThreadsAuthorizationUrl(
   return url.toString();
 }
 
-async function readTokenResponse<T>(response: Response): Promise<T> {
-  const data = (await response.json()) as T & {
-    error?: { message?: string };
-    error_message?: string;
-  };
-  if (!response.ok) {
-    throw new Error(
-      data.error?.message ?? data.error_message ?? "Threads OAuth request failed"
-    );
-  }
-  return data;
-}
-
 export async function exchangeThreadsCode(
   code: string,
   redirectUri: string
 ): Promise<{ accessToken: string; userId: string }> {
+  const appSecret = requireEnv("THREADS_APP_SECRET");
   const url = new URL(`${GRAPH_URL}/oauth/access_token`);
   url.search = new URLSearchParams({
     client_id: requireEnv("THREADS_APP_ID"),
-    client_secret: requireEnv("THREADS_APP_SECRET"),
+    client_secret: appSecret,
     code,
     grant_type: "authorization_code",
     redirect_uri: redirectUri,
   }).toString();
-  const response = await fetch(url, { method: "POST" });
-  const data = await readTokenResponse<{
-    access_token: string;
-    user_id: string | number;
-  }>(response);
-  return { accessToken: data.access_token, userId: String(data.user_id) };
+  const response = await threadsFetch(url, { method: "POST" });
+  const data = await readThreadsJson<Record<string, unknown>>(
+    response,
+    "Threads OAuth request failed",
+    [code, appSecret]
+  );
+  const accessToken = requireThreadsString(data.access_token);
+  const validUserId =
+    (typeof data.user_id === "string" && data.user_id.trim().length > 0) ||
+    (typeof data.user_id === "number" && Number.isFinite(data.user_id));
+  if (!validUserId) throw invalidThreadsResponse();
+  return { accessToken, userId: String(data.user_id) };
 }
 
 export async function exchangeLongLivedThreadsToken(
   shortLivedToken: string
 ): Promise<{ accessToken: string; expiresIn: number }> {
+  const appSecret = requireEnv("THREADS_APP_SECRET");
   const url = new URL(`${GRAPH_URL}/access_token`);
   url.search = new URLSearchParams({
     grant_type: "th_exchange_token",
-    client_secret: requireEnv("THREADS_APP_SECRET"),
+    client_secret: appSecret,
     access_token: shortLivedToken,
   }).toString();
-  const response = await fetch(url);
-  const data = await readTokenResponse<{
-    access_token: string;
-    expires_in: number;
-  }>(response);
-  return { accessToken: data.access_token, expiresIn: data.expires_in };
+  const response = await threadsFetch(url);
+  const data = await readThreadsJson<Record<string, unknown>>(
+    response,
+    "Threads OAuth request failed",
+    [shortLivedToken, appSecret]
+  );
+  const accessToken = requireThreadsString(data.access_token);
+  if (
+    typeof data.expires_in !== "number" ||
+    !Number.isFinite(data.expires_in) ||
+    data.expires_in <= 0
+  ) {
+    throw invalidThreadsResponse();
+  }
+  return { accessToken, expiresIn: data.expires_in };
 }

@@ -1,4 +1,41 @@
+import {
+  invalidThreadsResponse,
+  isThreadsRecord,
+  readThreadsJson,
+  redactThreadsSecrets,
+  requireThreadsString,
+  threadsFetch,
+} from "@/lib/threads/fetch";
+
 const GRAPH_URL = "https://graph.threads.net";
+const THREADS_PERMALINK_DOMAINS = ["threads.net", "threads.com"] as const;
+
+export { ThreadsApiError } from "@/lib/threads/fetch";
+
+export type ThreadsContainerStatusValue =
+  | "IN_PROGRESS"
+  | "FINISHED"
+  | "PUBLISHED"
+  | "ERROR"
+  | "EXPIRED";
+
+export interface ThreadsContainerStatus {
+  id: string;
+  status: ThreadsContainerStatusValue;
+  error_message?: string;
+}
+
+const THREADS_CONTAINER_STATUSES = new Set<ThreadsContainerStatusValue>([
+  "IN_PROGRESS",
+  "FINISHED",
+  "PUBLISHED",
+  "ERROR",
+  "EXPIRED",
+]);
+
+function requiredResponseId(value: unknown): string {
+  return requireThreadsString(value);
+}
 
 export interface ThreadsProfile {
   id: string;
@@ -16,6 +53,12 @@ export interface ThreadsPost {
   shortcode?: string;
 }
 
+export interface ThreadsPostDetails {
+  id: string;
+  permalink: string;
+  owner: { id: string };
+}
+
 export interface ThreadsReply extends ThreadsPost {
   username?: string;
   owner?: { id: string };
@@ -23,33 +66,6 @@ export interface ThreadsReply extends ThreadsPost {
   is_reply_owned_by_me?: boolean;
   root_post?: { id: string };
   replied_to?: { id: string };
-}
-
-export class ThreadsApiError extends Error {
-  constructor(
-    message: string,
-    public readonly status: number,
-    public readonly code: number | null,
-    public readonly retryable: boolean
-  ) {
-    super(message);
-    this.name = "ThreadsApiError";
-  }
-}
-
-async function readResponse<T>(response: Response): Promise<T> {
-  const data = (await response.json()) as T & {
-    error?: { message?: string; code?: number };
-  };
-  if (!response.ok) {
-    throw new ThreadsApiError(
-      data.error?.message ?? "Threads API request failed",
-      response.status,
-      data.error?.code ?? null,
-      response.status === 429 || response.status >= 500
-    );
-  }
-  return data;
 }
 
 function graphUrl(path: string, token: string, params?: Record<string, string>) {
@@ -62,25 +78,63 @@ function graphUrl(path: string, token: string, params?: Record<string, string>) 
 export async function getThreadsProfile(
   accessToken: string
 ): Promise<ThreadsProfile> {
-  const response = await fetch(
+  const response = await threadsFetch(
     graphUrl("/me", accessToken, {
       fields: "id,username,threads_profile_picture_url,threads_biography",
     })
   );
-  return readResponse<ThreadsProfile>(response);
+  const profile = await readThreadsJson<Record<string, unknown>>(
+    response,
+    "Threads API request failed",
+    [accessToken]
+  );
+  return {
+    ...profile,
+    id: requireThreadsString(profile.id),
+    username: requireThreadsString(profile.username),
+  } as ThreadsProfile;
 }
 
-async function getPaged<T>(initialUrl: URL, max: number): Promise<T[]> {
+async function getPaged<T>(
+  initialUrl: URL,
+  max: number,
+  accessToken: string
+): Promise<T[]> {
   const results: T[] = [];
   let next: string | null = initialUrl.toString();
   while (next && results.length < max) {
-    const response: Response = await fetch(next);
-    const page: {
-      data: T[];
-      paging?: { next?: string };
-    } = await readResponse(response);
-    results.push(...page.data.slice(0, max - results.length));
-    next = page.paging?.next ?? null;
+    const response: Response = await threadsFetch(next);
+    const page = await readThreadsJson<Record<string, unknown>>(
+      response,
+      "Threads API request failed",
+      [accessToken]
+    );
+    if (!Array.isArray(page.data)) throw invalidThreadsResponse();
+    const items = page.data.map((item) => {
+      if (!isThreadsRecord(item)) throw invalidThreadsResponse();
+      requireThreadsString(item.id);
+      return item as T;
+    });
+    results.push(...items.slice(0, max - results.length));
+
+    if (page.paging === undefined) {
+      next = null;
+    } else {
+      if (!isThreadsRecord(page.paging)) throw invalidThreadsResponse();
+      if (page.paging.next === undefined) {
+        next = null;
+      } else {
+        const nextUrl = requireThreadsString(page.paging.next);
+        let parsedNext: URL;
+        try {
+          parsedNext = new URL(nextUrl);
+        } catch {
+          throw invalidThreadsResponse();
+        }
+        if (parsedNext.origin !== GRAPH_URL) throw invalidThreadsResponse();
+        next = parsedNext.toString();
+      }
+    }
   }
   return results;
 }
@@ -94,8 +148,56 @@ export function getOwnedThreads(
       fields: "id,text,timestamp,permalink,media_type,shortcode",
       limit: String(Math.min(limit, 100)),
     }),
-    limit
+    limit,
+    accessToken
   );
+}
+
+function normalizeThreadsPermalink(value: unknown): string | null {
+  if (typeof value !== "string" || value.trim().length === 0) return null;
+  try {
+    const url = new URL(value);
+    const isThreadsHost = THREADS_PERMALINK_DOMAINS.some((domain) =>
+      url.hostname === domain ||
+      (url.hostname.length > domain.length + 1 &&
+        url.hostname.endsWith(`.${domain}`))
+    );
+    const isCanonicalPost = url.protocol === "https:" &&
+      isThreadsHost &&
+      url.username === "" &&
+      url.password === "" &&
+      url.port === "" &&
+      /^\/@[^/]+\/post\/[^/]+\/?$/.test(url.pathname);
+    return isCanonicalPost ? `${url.origin}${url.pathname}` : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function getThreadsPostDetails(
+  accessToken: string,
+  postId: string
+): Promise<ThreadsPostDetails> {
+  const response = await threadsFetch(
+    graphUrl(`/${encodeURIComponent(postId)}`, accessToken, {
+      fields: "id,permalink,owner",
+    })
+  );
+  const post = await readThreadsJson<Record<string, unknown>>(
+    response,
+    "Threads API request failed",
+    [accessToken]
+  );
+  const id = requireThreadsString(post.id);
+  if (id !== postId || !isThreadsRecord(post.owner)) {
+    throw invalidThreadsResponse();
+  }
+  const ownerId = requireThreadsString(post.owner.id);
+  const permalink = normalizeThreadsPermalink(post.permalink);
+  if (!permalink) {
+    throw invalidThreadsResponse();
+  }
+  return { id, permalink, owner: { id: ownerId } };
 }
 
 export function getThreadsConversation(
@@ -112,17 +214,18 @@ export function getThreadsConversation(
       reverse: "true",
       limit: "100",
     }),
-    limit
+    limit,
+    accessToken
   );
 }
 
-export async function publishThreadsReply(
+export async function createThreadsReplyContainer(
   accessToken: string,
   userId: string,
   replyToId: string,
   text: string
 ): Promise<string> {
-  const createResponse = await fetch(
+  const createResponse = await threadsFetch(
     graphUrl(`/${userId}/threads`, accessToken, {
       media_type: "TEXT",
       text,
@@ -130,14 +233,71 @@ export async function publishThreadsReply(
     }),
     { method: "POST" }
   );
-  const container = await readResponse<{ id: string }>(createResponse);
+  const container = await readThreadsJson<{ id?: unknown }>(
+    createResponse,
+    "Threads API request failed",
+    [accessToken]
+  );
+  return requiredResponseId(container.id);
+}
 
-  const publishResponse = await fetch(
+export async function getThreadsContainerStatus(
+  accessToken: string,
+  containerId: string
+): Promise<ThreadsContainerStatus> {
+  const response = await threadsFetch(
+    graphUrl(`/${containerId}`, accessToken, {
+      fields: "id,status,error_message",
+    })
+  );
+  const data = await readThreadsJson<{
+    id?: unknown;
+    status?: unknown;
+    error_message?: unknown;
+  }>(
+    response,
+    "Threads API request failed",
+    [accessToken]
+  );
+  const id = requiredResponseId(data.id);
+  if (id !== containerId) throw invalidThreadsResponse();
+  if (
+    typeof data.status !== "string" ||
+    !THREADS_CONTAINER_STATUSES.has(data.status as ThreadsContainerStatusValue)
+  ) {
+    throw invalidThreadsResponse();
+  }
+  const container: ThreadsContainerStatus = {
+    id,
+    status: data.status as ThreadsContainerStatusValue,
+    ...(typeof data.error_message === "string"
+      ? { error_message: data.error_message }
+      : {}),
+  };
+  if (container.error_message) {
+    container.error_message = redactThreadsSecrets(
+      container.error_message,
+      [accessToken]
+    );
+  }
+  return container;
+}
+
+export async function publishThreadsReplyContainer(
+  accessToken: string,
+  userId: string,
+  containerId: string
+): Promise<string> {
+  const publishResponse = await threadsFetch(
     graphUrl(`/${userId}/threads_publish`, accessToken, {
-      creation_id: container.id,
+      creation_id: containerId,
     }),
     { method: "POST" }
   );
-  const published = await readResponse<{ id: string }>(publishResponse);
-  return published.id;
+  const published = await readThreadsJson<{ id?: unknown }>(
+    publishResponse,
+    "Threads API request failed",
+    [accessToken]
+  );
+  return requiredResponseId(published.id);
 }

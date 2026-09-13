@@ -171,12 +171,14 @@ model ThreadsCampaign {
   workspaceId      String
   threadsAccountId String
   name             String
-  postId           String
-  postUrl          String
+  postId           String?
+  postUrl          String?
+  postVerifiedAt   DateTime?
+  matchAnyPost     Boolean  @default(false)
   keywords         String[]
   wholeWordMatch   Boolean  @default(true)
   replyMessage     String
-  isActive         Boolean  @default(true)
+  isActive         Boolean  @default(false)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
@@ -198,9 +200,13 @@ model ThreadsReplyLog {
   replyAuthorId     String?
   replyAuthorName   String?
   replyText         String
+  replyMessage      String?
   matchedKeyword    String?
   status            ThreadsReplyStatus @default(PENDING)
   attempts          Int                @default(0)
+  publishContainerId String?
+  publishLeaseToken String?
+  publishLeaseExpiresAt DateTime?
   publishedReplyId  String?
   replySentAt       DateTime?
   errorMessage      String?
